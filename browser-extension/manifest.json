@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Fantasy Football AI Coach Helper",
+  "version": "1.0",
+  "description": "Easily connect your ESPN fantasy league to Fantasy Football AI Coach",
+  "permissions": [
+    "activeTab",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://fantasy.espn.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://fantasy.espn.com/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Fantasy Football AI Coach Helper"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

@@ -1,0 +1,269 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Fantasy Football AI Coach Infrastructure
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+  
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-5-sonnet-20241022-v2:0
+  
+  SESFromEmail:
+    Type: String
+    Description: Verified SES email address for sending notifications
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Timeout: 60
+    MemorySize: 512
+    Environment:
+      Variables:
+        DYNAMODB_TABLE: !Ref UsersTable
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        SES_FROM_EMAIL: !Ref SESFromEmail
+        REGION: !Ref AWS::Region
+        ENVIRONMENT: !Ref Environment
+
+Resources:
+  # DynamoDB Table for Users
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub fantasy-football-users-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  # Lambda Functions
+  DailyAnalyzerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fantasy-football-daily-analyzer-${Environment}
+      CodeUri: ../lambda/daily-analyzer/
+      Handler: index.handler
+      Timeout: 300
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - LambdaInvokePolicy:
+            FunctionName: '*'
+
+  FetchRosterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fantasy-football-fetch-roster-${Environment}
+      CodeUri: ../lambda/fetch-roster/
+      Handler: index.handler
+
+  FetchPlayerDataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fantasy-football-fetch-player-data-${Environment}
+      CodeUri: ../lambda/fetch-player-data/
+      Handler: index.handler
+      Timeout: 90
+      MemorySize: 1024
+
+  WebResearchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fantasy-football-web-research-${Environment}
+      CodeUri: ../lambda/web-research/
+      Handler: index.handler
+      Timeout: 120
+      MemorySize: 1024
+
+  AIAnalyzerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fantasy-football-ai-analyzer-${Environment}
+      CodeUri: ../lambda/ai-analyzer/
+      Handler: index.handler
+      Timeout: 180
+      MemorySize: 1024
+      Policies:
+        - Statement:
+          - Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+            Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/*
+
+  SendNotificationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fantasy-football-send-notifications-${Environment}
+      CodeUri: ../lambda/send-notifications/
+      Handler: index.handler
+      Policies:
+        - SESCrudPolicy:
+            IdentityName: !Ref SESFromEmail
+
+  SeasonCheckerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fantasy-football-season-checker-${Environment}
+      CodeUri: ../lambda/season-checker/
+      Handler: index.handler
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /season
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fantasy-football-api-${Environment}
+      CodeUri: ../lambda/api/
+      Handler: index.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - LambdaInvokePolicy:
+            FunctionName: '*'
+      Events:
+        UserSetup:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/setup
+            Method: POST
+        UserSetupOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/setup
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserConfig:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/config
+            Method: GET
+        UserConfigOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/config
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        AnalysisLatest:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /analysis/latest
+            Method: GET
+        AnalysisLatestOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /analysis/latest
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        Roster:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /roster
+            Method: GET
+        RosterOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /roster
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        AnalysisRun:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /analysis/run
+            Method: POST
+        AnalysisRunOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /analysis/run
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+
+  # API Gateway for Dashboard
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub fantasy-football-api-${Environment}
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt UserPool.Arn
+
+  # Cognito User Pool
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub fantasy-football-users-${Environment}
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: false
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub fantasy-football-client-${Environment}
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+  
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+  
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref UserPoolClient
+  
+  DynamoDBTable:
+    Description: DynamoDB Users Table
+    Value: !Ref UsersTable

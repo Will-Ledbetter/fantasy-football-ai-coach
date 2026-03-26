@@ -1,0 +1,16 @@
+{
+  "name": "fantasy-football-ai-coach",
+  "version": "1.0.0",
+  "description": "AI-powered fantasy football assistant that analyzes your roster daily and provides personalized lineup recommendations.",
+  "main": "test-enhanced-features.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "aws-sdk": "^2.1693.0"
+  }
+}

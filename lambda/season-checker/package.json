@@ -1,0 +1,7 @@
+{
+  "name": "season-checker",
+  "version": "1.0.0",
+  "description": "Check if we're in NFL season",
+  "main": "index.js",
+  "dependencies": {}
+}

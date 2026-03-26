@@ -1,0 +1,9 @@
+{
+  "name": "send-notifications",
+  "version": "1.0.0",
+  "description": "Send fantasy football analysis via email and SMS",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-ses": "^3.600.0"
+  }
+}

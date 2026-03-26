@@ -1,0 +1,92 @@
+{
+  "roster": {
+    "teamName": "Test Team",
+    "record": "8-4",
+    "starters": [
+      {
+        "playerId": "QB1",
+        "name": "CeeDee Lamb",
+        "position": "WR",
+        "team": "DAL"
+      },
+      {
+        "playerId": "RB1",
+        "name": "Bucky Irving",
+        "position": "RB",
+        "team": "TB"
+      },
+      {
+        "playerId": "WR1",
+        "name": "DJ Moore",
+        "position": "WR",
+        "team": "CHI"
+      },
+      {
+        "playerId": "K1",
+        "name": "Jake Elliott",
+        "position": "K",
+        "team": "PHI"
+      }
+    ],
+    "bench": [
+      {
+        "playerId": "QB2",
+        "name": "Aaron Rodgers",
+        "position": "QB",
+        "team": "NYJ"
+      }
+    ]
+  },
+  "playerData": {
+    "players": [
+      {
+        "playerId": "QB1",
+        "name": "CeeDee Lamb",
+        "team": "DAL",
+        "position": "WR",
+        "weather": {
+          "conditions": "Cool",
+          "temperature": 55,
+          "wind": 5,
+          "impact": "neutral"
+        },
+        "defenseMatchup": {
+          "difficulty": "very_favorable",
+          "rank": 32,
+          "opponent": "PHI",
+          "analysis": "Facing PHI defense (#32 vs WR) - Poor defense - excellent matchup"
+        },
+        "vegasInfo": {
+          "impliedScore": 24.5,
+          "gameScript": "Competitive game"
+        }
+      },
+      {
+        "playerId": "RB1",
+        "name": "Bucky Irving",
+        "team": "TB",
+        "position": "RB",
+        "weather": {
+          "conditions": "Clear",
+          "temperature": 72,
+          "wind": 4,
+          "impact": "positive"
+        },
+        "defenseMatchup": {
+          "difficulty": "favorable",
+          "rank": 28,
+          "opponent": "DAL",
+          "analysis": "Facing DAL defense (#28 vs RB) - Weak defense - good matchup"
+        },
+        "vegasInfo": {
+          "impliedScore": 27.5,
+          "gameScript": "High scoring game"
+        }
+      }
+    ]
+  },
+  "webResearch": {
+    "researchResults": []
+  },
+  "weekNumber": 16
+}

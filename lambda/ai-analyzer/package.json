@@ -1,0 +1,15 @@
+{
+  "name": "fantasy-football-ai-analyzer",
+  "version": "2.0.0",
+  "description": "Enhanced AI analyzer with Bedrock integration for Fantasy Football Coach",
+  "main": "index.js",
+  "dependencies": {
+    "aws-sdk": "^2.1500.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["fantasy", "football", "ai", "bedrock", "aws", "lambda"],
+  "author": "",
+  "license": "ISC"
+}

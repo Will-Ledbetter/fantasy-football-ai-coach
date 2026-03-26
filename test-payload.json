@@ -1,0 +1,17 @@
+{
+  "players": [
+    {
+      "playerId": "4046",
+      "name": "Josh Allen",
+      "position": "QB",
+      "team": "BUF"
+    },
+    {
+      "playerId": "4035",
+      "name": "Christian McCaffrey",
+      "position": "RB",
+      "team": "SF"
+    }
+  ],
+  "weekNumber": 12
+}

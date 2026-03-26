@@ -1,0 +1,10 @@
+{
+  "name": "fantasy-football-api",
+  "version": "1.0.0",
+  "description": "API endpoints for Fantasy Football AI Coach",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.400.0",
+    "@aws-sdk/lib-dynamodb": "^3.400.0"
+  }
+}

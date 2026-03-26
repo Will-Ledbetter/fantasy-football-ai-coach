@@ -1,0 +1,7 @@
+{
+  "name": "fetch-roster",
+  "version": "1.0.0",
+  "description": "Fetch fantasy roster from platform APIs",
+  "main": "index.js",
+  "dependencies": {}
+}
