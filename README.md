@@ -12,6 +12,10 @@ AI-powered fantasy football assistant that analyzes your roster daily and provid
 - **Trade Analyzer**: Evaluates trade offers
 - **Season Detection**: Automatically pauses during offseason (Feb-Aug) to save costs
 
+## LinkedIn Post
+
+[See it in action](https://www.linkedin.com/posts/will-ledbetter-114318167_aws-amazonkiro-awskiro-activity-7406546574559846400-uyCK?utm_source=share&utm_medium=member_desktop&rcm=ACoAACe8W6ABz_yW6tZUwf4zTku75hhXakj6lxU)
+
 ## Architecture
 
 - **Backend**: AWS Lambda + EventBridge + DynamoDB
