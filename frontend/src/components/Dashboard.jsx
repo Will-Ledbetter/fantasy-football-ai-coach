@@ -1,258 +1,489 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { fetchAuthSession, signOut } from 'aws-amplify/auth';
+import { awsConfig } from '../aws-config';
+import GradeGauge, { PositionGrades } from './GradeGauge';
+import MOCK_DATASETS from './mockAnalysis';
 import './Dashboard.css';
 
-function Dashboard({ user }) {
+function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateToFPL }) {
   const [analysis, setAnalysis] = useState(null);
-  const [roster, setRoster] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showSettings, setShowSettings] = useState(false);
-  const [userConfig, setUserConfig] = useState(null);
-  const [analysisRunning, setAnalysisRunning] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [activeTab, setActiveTab] = useState('recs');
+  const [animKey, setAnimKey] = useState(0);
+  const [demoMode, setDemoMode] = useState(null);
+  const [expandedCards, setExpandedCards] = useState(new Set());
+  const [leagueType, setLeagueType] = useState('redraft');
+  // Chat state
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef(null);
 
-  useEffect(() => {
-    loadDashboard();
-    loadUserConfig();
-  }, []);
+  useEffect(() => { loadDashboard(); }, []);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+
+  async function getToken() {
+    const session = await fetchAuthSession();
+    return session.tokens?.idToken?.toString();
+  }
 
   async function loadDashboard() {
     try {
-      // Get auth token
-      const session = await fetchAuthSession();
-      const token = session.tokens?.idToken?.toString();
-
-      if (!token) {
-        throw new Error('Not authenticated');
-      }
-
-      // Fetch latest analysis
-      const analysisResponse = await fetch('https://pv4kpd7p75.execute-api.us-east-1.amazonaws.com/dev/analysis/latest', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const analysisData = await analysisResponse.json();
-      setAnalysis(analysisData);
-
-      // Fetch current roster
-      const rosterResponse = await fetch('https://pv4kpd7p75.execute-api.us-east-1.amazonaws.com/dev/roster', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const rosterData = await rosterResponse.json();
-      setRoster(rosterData);
-    } catch (error) {
-      console.error('Error loading dashboard:', error);
-      // Set empty data so UI still renders
-      setAnalysis({ recommendations: [], message: 'Unable to load analysis' });
-      setRoster({ starters: [], bench: [], message: 'Unable to load roster' });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadUserConfig() {
-    try {
-      const session = await fetchAuthSession();
-      const token = session.tokens?.idToken?.toString();
-
-      const response = await fetch('https://pv4kpd7p75.execute-api.us-east-1.amazonaws.com/dev/user/config', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
-        const config = await response.json();
-        setUserConfig(config);
-      }
-    } catch (error) {
-      console.error('Error loading user config:', error);
-    }
+      const token = await getToken();
+      const [analysisRes, configRes] = await Promise.all([
+        fetch(`${awsConfig.apiEndpoint}/analysis/latest`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${awsConfig.apiEndpoint}/user/config`, { headers: { Authorization: `Bearer ${token}` } })
+      ]);
+      setAnalysis(await analysisRes.json());
+      const config = await configRes.json();
+      setLeagueType(config.leagueType || 'redraft');
+    } catch (err) {
+      console.error('Load error:', err);
+    } finally { setLoading(false); }
   }
 
   async function runAnalysis() {
-    setAnalysisRunning(true);
-    
+    setRunning(true);
+    setProgress('Starting analysis...');
     try {
-      const session = await fetchAuthSession();
-      const token = session.tokens?.idToken?.toString();
-
-      if (!token) {
-        throw new Error('Not authenticated');
-      }
-
-      const response = await fetch('https://pv4kpd7p75.execute-api.us-east-1.amazonaws.com/dev/analysis/run', {
+      const token = await getToken();
+      const res = await fetch(`${awsConfig.apiEndpoint}/analysis/run`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
       });
-
-      const result = await response.json();
-      
-      if (response.ok) {
-        // Poll for results after a short delay
-        setTimeout(() => {
-          loadDashboard();
-        }, 3000);
-        
-        // Show success message
-        console.log('Analysis started:', result.message);
-      } else {
-        throw new Error(result.error || 'Failed to start analysis');
+      const result = await res.json();
+      if (result?.limitReached) {
+        setRunning(false); setProgress('');
+        alert('Free tier limit reached. Upgrade to Pro for unlimited analysis.');
+        return;
       }
 
-    } catch (error) {
-      console.error('Error running analysis:', error);
-      alert('Failed to run analysis. Please try again.');
-    } finally {
-      setAnalysisRunning(false);
+      const steps = ['Fetching your roster...', 'Analyzing player matchups...', 'Running AI recommendations...', 'Finalizing your report...'];
+      let stepIndex = 0;
+      let attempts = 0;
+
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        if (stepIndex < steps.length) { setProgress(steps[stepIndex]); stepIndex++; }
+        try {
+          const token2 = await getToken();
+          const pollRes = await fetch(`${awsConfig.apiEndpoint}/analysis/latest`, {
+            headers: { Authorization: `Bearer ${token2}` }
+          });
+          const newData = await pollRes.json();
+          if (newData?.lastUpdated && newData.lastUpdated !== analysis?.lastUpdated) {
+            clearInterval(pollInterval);
+            setAnalysis(newData);
+            setProgress(''); setRunning(false);
+          } else if (attempts >= 12) {
+            clearInterval(pollInterval);
+            await loadDashboard();
+            setProgress(''); setRunning(false);
+          }
+        } catch {
+          if (attempts >= 12) { clearInterval(pollInterval); setProgress(''); setRunning(false); }
+        }
+      }, 5000);
+    } catch (err) {
+      alert(err.message || 'Analysis failed');
+      setProgress(''); setRunning(false);
     }
   }
 
-  async function handleSignOut() {
+  async function sendChat() {
+    if (!chatInput.trim() || chatLoading) return;
+    const userMsg = chatInput.trim();
+    setChatInput('');
+    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setChatLoading(true);
+
     try {
-      await signOut();
-      window.location.reload();
-    } catch (error) {
-      console.error('Error signing out:', error);
+      const token = await getToken();
+      const res = await fetch(`${awsConfig.apiEndpoint}/chat`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMsg,
+          context: {
+            analysis: analysis,
+            conversationHistory: chatMessages.slice(-10)
+          }
+        })
+      });
+      const data = await res.json();
+      setChatMessages(prev => [...prev, { role: 'assistant', content: data.response || 'Sorry, I could not generate a response.' }]);
+    } catch (err) {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: 'Connection error. Please try again.' }]);
+    } finally {
+      setChatLoading(false);
     }
   }
 
-  if (loading) {
-    return <div className="loading">Loading your analysis...</div>;
+  function handleTabChange(tab) {
+    setActiveTab(tab);
+    setAnimKey(prev => prev + 1);
   }
+
+  function toggleCard(id) {
+    setExpandedCards(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function cleanText(text) {
+    return (text || '')
+      .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
+      .replace(/[\u{2600}-\u{27BF}]/gu, '')
+      .replace(/[\u{FE00}-\u{FE0F}]/gu, '')
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/\*(.*?)\*/g, '$1')
+      .replace(/^#+\s*/gm, '')
+      .replace(/^-\s*/gm, '• ')
+      .trim();
+  }
+
+  function getPriorityIcon(priority) {
+    if (priority === 'critical') return '🔴';
+    if (priority === 'high') return '🟠';
+    if (priority === 'medium') return '🟡';
+    return '⚪';
+  }
+
+  if (loading) return <div className="loading-container"><div className="spinner"></div><p>Loading...</p></div>;
+
+  const recs = analysis?.recommendations || [];
 
   return (
     <div className="dashboard">
-      <header className="dashboard-header">
-        <h1>🏈 Fantasy Football AI Coach</h1>
-        <div className="user-info">
-          <span>{user?.username || user?.signInDetails?.loginId || 'User'}</span>
-          <button onClick={() => setShowSettings(true)} className="btn btn-secondary">
-            ⚙️ Settings
-          </button>
-          <button onClick={handleSignOut} className="btn btn-secondary">
-            Sign Out
-          </button>
+      <header className="dash-header">
+        <img src="/logo.png" alt="Helix Sideline" className="dash-logo" />
+        <div className="dash-actions">
+          <button className="btn btn-secondary" onClick={onNavigateToDraft}>🏈 NFL Draft</button>
+          <button className="btn btn-secondary" onClick={onNavigateToFPL}>⚽ FPL Draft</button>
+          <button className="btn btn-secondary" onClick={onNavigateToSettings}>Settings</button>
+          <button className="btn btn-secondary" onClick={async () => { await signOut(); window.location.reload(); }}>Sign Out</button>
         </div>
       </header>
 
-      {/* Settings Modal */}
-      {showSettings && (
-        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h2>League Settings</h2>
-            {userConfig ? (
-              <div className="settings-info">
-                <div className="setting-item">
-                  <strong>Platform:</strong> {userConfig.platform.toUpperCase()}
+      <div className="dash-layout">
+        {/* Main Content Column */}
+        <main className="dash-main">
+          {/* Top Bar: Grade + Run */}
+          <div className="dash-top-bar">
+            <div className="dash-top-left">
+              {analysis?.lineupGrade && analysis.lineupGrade.overallGrade && analysis.lineupGrade.overallGrade !== 'N/A' && (
+                <div className="grade-compact">
+                  <GradeGauge grade={analysis.lineupGrade.overallGrade} score={analysis.lineupGrade.overallScore} />
                 </div>
-                <div className="setting-item">
-                  <strong>League ID:</strong> {userConfig.leagueId}
-                </div>
-                {userConfig.platformUserId && (
-                  <div className="setting-item">
-                    <strong>User ID:</strong> {userConfig.platformUserId}
-                  </div>
-                )}
-                <div className="setting-item">
-                  <strong>Last Updated:</strong> {new Date(userConfig.updatedAt).toLocaleDateString()}
-                </div>
-                <p className="settings-note">
-                  To change your league settings, please sign out and set up again with new credentials.
-                </p>
+              )}
+              <div className="dash-meta">
+                <h1>{leagueType === 'dynasty' ? 'Dynasty Command Center' : leagueType === 'keeper' ? 'Keeper Command Center' : 'Game Day Command Center'}</h1>
+                {analysis?.lastUpdated && <p className="updated">Last analysis: {new Date(analysis.lastUpdated).toLocaleDateString()}</p>}
               </div>
-            ) : (
-              <p>Loading settings...</p>
-            )}
-            <button onClick={() => setShowSettings(false)} className="btn btn-primary">
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="dashboard-content">
-        {/* Welcome Message */}
-        <section className="welcome-section card">
-          <h2>Welcome to Your Fantasy Football AI Coach! 🎉</h2>
-          <p>Your league has been connected successfully. Here's what you can do:</p>
-          <ul>
-            <li>🏈 <strong>On-Demand Analysis:</strong> Click "Run Analysis" to get AI-powered roster insights</li>
-            <li>📊 <strong>Detailed Breakdowns:</strong> Get player-specific recommendations and matchup analysis</li>
-            <li>🏆 <strong>Smart Insights:</strong> Receive sit/start advice, waiver wire targets, and trade suggestions</li>
-            <li>⚔️ <strong>Head-to-Head Strategy:</strong> Get opponent-specific game plans and lineup optimization</li>
-          </ul>
-          <p className="info-box">
-            💡 <strong>Get Started:</strong> Click the "Run Analysis" button below to generate your first personalized fantasy football report!
-          </p>
-        </section>
-
-        {/* Analysis Control Section */}
-        <section className="analysis-control-section">
-          <div className="analysis-header">
-            <h2>Fantasy Analysis</h2>
-            <button 
-              onClick={runAnalysis} 
-              disabled={analysisRunning}
-              className={`btn btn-primary analysis-btn ${analysisRunning ? 'running' : ''}`}
-            >
-              {analysisRunning ? '🔄 Running Analysis...' : '🏈 Run Analysis'}
-            </button>
-          </div>
-          {analysis?.lastUpdated && (
-            <p className="last-updated">
-              Last updated: {new Date(analysis.lastUpdated).toLocaleString()}
-            </p>
-          )}
-        </section>
-
-        {/* Recommendations Section */}
-        <section className="recommendations-section">
-          <h2>Today's Recommendations</h2>
-          {analysis?.recommendations?.length > 0 ? (
-            <div className="recommendations-list">
-              {analysis.recommendations.map((rec, index) => (
-                <div key={index} className={`recommendation ${rec.priority}`}>
-                  <div className="rec-header">
-                    <span className="rec-type">{rec.type.replace('_', ' ')}</span>
-                    <span className="rec-priority">{rec.priority}</span>
-                  </div>
-                  <p className="rec-text">{rec.text}</p>
-                </div>
-              ))}
             </div>
-          ) : (
-            <div className="no-recommendations">
-              <p>{analysis?.message || 'Click "Run Analysis" to get personalized recommendations for your roster!'}</p>
-              {!analysis && (
-                <button 
-                  onClick={runAnalysis} 
-                  disabled={analysisRunning}
-                  className="btn btn-primary"
-                >
-                  {analysisRunning ? 'Running...' : 'Get Started'}
-                </button>
+            <button className={`btn btn-primary btn-run ${running ? 'disabled' : ''}`} onClick={runAnalysis} disabled={running}>
+              {running ? progress || 'Running...' : 'Run Analysis'}
+            </button>
+          </div>
+
+          {/* Position Grades Row */}
+          {analysis?.lineupGrade?.positionGrades && (
+            <div className="position-grades-row">
+              <PositionGrades grades={analysis.lineupGrade.positionGrades} />
+            </div>
+          )}
+
+          {/* Tab Bar */}
+          <div className="tab-bar">
+            <button className={`tab-button ${activeTab === 'recs' ? 'active' : ''}`} onClick={() => handleTabChange('recs')}>
+              Insights
+            </button>
+            {analysis?.dynastyTradeInsights && (leagueType === 'dynasty' || leagueType === 'keeper') && (
+              <button className={`tab-button ${activeTab === 'trades' ? 'active' : ''}`} onClick={() => handleTabChange('trades')}>
+                Trades
+              </button>
+            )}
+            <button className={`tab-button ${activeTab === 'roster' ? 'active' : ''}`} onClick={() => handleTabChange('roster')}>
+              Roster
+            </button>
+            <button className={`tab-button ${activeTab === 'analysis' ? 'active' : ''}`} onClick={() => handleTabChange('analysis')}>
+              Deep Dive
+            </button>
+          </div>
+
+          {/* Tab: Insights (Recommendations redesigned) */}
+          {activeTab === 'recs' && (
+            <div className="insights-grid" key={`recs-${animKey}`}>
+              {recs.length > 0 ? recs.map((rec, i) => {
+                const lines = cleanText(rec.text).split('\n').filter(l => l.trim());
+                const isExpanded = expandedCards.has(`rec-${i}`);
+                const preview = lines[0] || '';
+                const hasMore = lines.length > 1;
+
+                return (
+                  <div
+                    key={i}
+                    className={`insight-card insight-card-animate ${rec.priority === 'high' || rec.priority === 'critical' ? 'insight-hot' : ''} ${isExpanded ? 'expanded' : ''}`}
+                    style={{ '--stagger-delay': `${Math.min(i * 40, 200)}ms` }}
+                    onClick={() => hasMore && toggleCard(`rec-${i}`)}
+                  >
+                    <div className="insight-top">
+                      <span className="insight-icon">{getPriorityIcon(rec.priority)}</span>
+                      <span className="insight-type">{(rec.type || '').replace('_', ' ')}</span>
+                      {hasMore && <span className="insight-expand">{isExpanded ? '−' : '+'}</span>}
+                    </div>
+                    <p className="insight-preview">{preview}</p>
+                    {isExpanded && lines.slice(1).map((line, j) => (
+                      <p key={j} className="insight-detail">{line.trim()}</p>
+                    ))}
+                  </div>
+                );
+              }) : (
+                <div className="empty-card">
+                  <h3>No Insights Yet</h3>
+                  <p>{analysis?.message || 'Run an analysis to get dynasty-specific recommendations.'}</p>
+                </div>
               )}
             </div>
           )}
-        </section>
 
-        {/* Full Analysis Section */}
-        {analysis?.analysis && (
-          <section className="analysis-section">
-            <h2>Full AI Analysis</h2>
-            <div className="analysis-content">
-              <pre>{analysis.analysis}</pre>
+          {/* Tab: Dynasty Trades */}
+          {activeTab === 'trades' && analysis?.dynastyTradeInsights && (
+            <div className="trades-section" key={`trades-${animKey}`}>
+              {/* Trade Packages */}
+              {analysis.dynastyTradeInsights.tradePackages?.length > 0 && (
+                <div className="trade-group">
+                  <h3 className="trade-group-title">Recommended Trades</h3>
+                  {analysis.dynastyTradeInsights.tradePackages.map((pkg, i) => (
+                    <div key={i} className="trade-card trade-card-animate" style={{ '--stagger-delay': `${i * 60}ms` }}>
+                      <div className="trade-card-header">
+                        <span className="trade-target-team">{pkg.targetTeam}</span>
+                        <span className="trade-record-badge">{pkg.targetRecord}</span>
+                      </div>
+                      <div className="trade-flow">
+                        <div className="trade-side trade-send">
+                          <span className="trade-label">You Send</span>
+                          <div className="trade-players">
+                            {pkg.send.map((p, j) => (
+                              <span key={j} className="player-chip send">{p.name} <small>{p.position}</small></span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="trade-arrow">⇄</div>
+                        <div className="trade-side trade-receive">
+                          <span className="trade-label">You Get</span>
+                          <div className="trade-players">
+                            {pkg.receive.map((p, j) => (
+                              <span key={j} className="player-chip receive">{p.name} <small>{p.position} · {p.age}</small></span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <p className="trade-reasoning">{pkg.reasoning}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Sell High / Buy Low in a two-column grid */}
+              <div className="trade-columns">
+                {analysis.dynastyTradeInsights.sellHighCandidates?.length > 0 && (
+                  <div className="trade-group">
+                    <h3 className="trade-group-title sell">Sell High</h3>
+                    {analysis.dynastyTradeInsights.sellHighCandidates.map((p, i) => (
+                      <div key={i} className="mini-trade-card sell">
+                        <div className="mini-trade-top">
+                          <span className="player-name">{p.player}</span>
+                          <span className="player-meta">{p.position} · Age {p.age}</span>
+                        </div>
+                        <p className="mini-trade-reason">{p.dynastyAdvice}</p>
+                        {p.potentialBuyers?.length > 0 && (
+                          <div className="buyer-chips">
+                            {p.potentialBuyers.map((b, j) => <span key={j} className="buyer-chip">{b}</span>)}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {analysis.dynastyTradeInsights.buyLowTargets?.length > 0 && (
+                  <div className="trade-group">
+                    <h3 className="trade-group-title buy">Buy Low</h3>
+                    {analysis.dynastyTradeInsights.buyLowTargets.map((t, i) => (
+                      <div key={i} className="mini-trade-card buy">
+                        <div className="mini-trade-top">
+                          <span className="player-name">{t.player}</span>
+                          <span className="player-meta">{t.position} · Age {t.age}</span>
+                        </div>
+                        <p className="mini-trade-owner">Owner: {t.owner}</p>
+                        <p className="mini-trade-reason">{t.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* League Landscape */}
+              {analysis.dynastyTradeInsights.leagueTradeOpportunities?.length > 0 && (
+                <div className="trade-group">
+                  <h3 className="trade-group-title">League Landscape</h3>
+                  {analysis.dynastyTradeInsights.leagueTradeOpportunities.map((opp, i) => (
+                    <div key={i} className="landscape-card">
+                      <span className="landscape-type">{opp.type}</span>
+                      <p className="landscape-advice">{opp.advice}</p>
+                      <div className="landscape-teams">
+                        {opp.teams.map((t, j) => (
+                          <span key={j} className="team-badge">{t.name} ({t.record})</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </section>
-        )}
+          )}
 
+          {/* Tab: Roster */}
+          {activeTab === 'roster' && (
+            <div className="roster-section" key={`roster-${animKey}`}>
+              {analysis?.lineupOptimizations?.length > 0 && (
+                <div className="trade-group">
+                  <h3 className="trade-group-title">Lineup Swaps</h3>
+                  {analysis.lineupOptimizations.map((opt, i) => (
+                    <div key={i} className="swap-card">
+                      <div className="swap-flow">
+                        <span className="player-chip send">{opt.swap.out} <small>OUT</small></span>
+                        <span className="swap-arrow">→</span>
+                        <span className="player-chip receive">{opt.swap.in} <small>IN</small></span>
+                      </div>
+                      <p className="swap-reason">{opt.swap.reasoning}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {analysis?.waiverTargets?.length > 0 && (
+                <div className="trade-group">
+                  <h3 className="trade-group-title">Waiver Targets</h3>
+                  {analysis.waiverTargets.filter(t => t.position !== 'DROP' && t.position !== 'TRADE').map((target, i) => (
+                    <div key={i} className="waiver-card">
+                      <div className="waiver-header">
+                        <span className="waiver-position">{target.position}</span>
+                        <span className={`rec-priority ${target.priority}`}>{target.priority}</span>
+                      </div>
+                      <p className="waiver-reasoning">{target.reasoning}</p>
+                      {target.specificTargets?.length > 0 && (
+                        <div className="waiver-targets">
+                          {target.specificTargets.slice(0, 3).map((t, j) => (
+                            <span key={j} className="player-chip receive">{t.name || t} <small>{t.team || ''}</small></span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
+          {/* Tab: Deep Dive (Full Analysis) */}
+          {activeTab === 'analysis' && (
+            <div className="deep-dive" key={`analysis-${animKey}`}>
+              {analysis?.analysis ? (
+                <div className="analysis-card">
+                  {cleanText(analysis.analysis).split('\n').filter(l => l.trim()).map((line, i) => {
+                    const isHeading = /^[A-Z\s]{4,}:?$/.test(line.trim()) || line.includes('ANALYSIS') || line.includes('OVERVIEW') || line.includes('LINEUP') || line.includes('STRATEGY') || line.includes('MATCHUP');
+                    return (
+                      <p key={i} className={isHeading ? 'analysis-heading' : 'analysis-line'}>
+                        {line.trim()}
+                      </p>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-card">
+                  <h3>No Analysis Available</h3>
+                  <p>Run an analysis to see the full AI breakdown.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+
+        {/* Chat Column */}
+        <aside className="chat-panel">
+          <div className="chat-header">
+            <div className="chat-title">
+              <span className="chat-dot"></span>
+              {leagueType === 'dynasty' ? 'Dynasty Advisor' : leagueType === 'keeper' ? 'Keeper Advisor' : 'Fantasy Advisor'}
+            </div>
+            <small className="chat-subtitle">Ask about {leagueType === 'dynasty' || leagueType === 'keeper' ? 'trades, roster moves, draft strategy' : 'lineup decisions, matchups, waivers'}</small>
+          </div>
+          <div className="chat-messages">
+            {chatMessages.length === 0 && (
+              <div className="chat-welcome">
+                <p>I'm your {leagueType === 'dynasty' ? 'dynasty' : 'fantasy'} AI advisor. I can see your full roster, league data, and analysis.</p>
+                <div className="chat-suggestions">
+                  {(leagueType === 'dynasty' || leagueType === 'keeper') ? (
+                    <>
+                      <button onClick={() => { setChatInput('Should I sell any aging players?'); }}>Sell candidates?</button>
+                      <button onClick={() => { setChatInput('What are my biggest roster weaknesses?'); }}>Roster weaknesses?</button>
+                      <button onClick={() => { setChatInput('Who should I target in trades?'); }}>Trade targets?</button>
+                      <button onClick={() => { setChatInput('What picks do I have and what should I do with them?'); }}>Draft picks?</button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => { setChatInput('Who should I start this week?'); }}>Start/sit?</button>
+                      <button onClick={() => { setChatInput('What are my biggest roster weaknesses?'); }}>Roster weaknesses?</button>
+                      <button onClick={() => { setChatInput('Who should I pick up on waivers?'); }}>Waiver targets?</button>
+                      <button onClick={() => { setChatInput('How does my matchup look this week?'); }}>Matchup outlook?</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            {chatMessages.map((msg, i) => (
+              <div key={i} className={`chat-msg ${msg.role}`}>
+                <div className="chat-bubble">
+                  {msg.content.split('\n').map((line, j) => {
+                    // Strip markdown formatting
+                    const clean = line
+                      .replace(/#{1,6}\s*/g, '')
+                      .replace(/\*\*(.*?)\*\*/g, '$1')
+                      .replace(/\*(.*?)\*/g, '$1')
+                      .replace(/^[-*]\s/, '• ');
+                    return clean.trim() ? <p key={j}>{clean}</p> : null;
+                  })}
+                </div>
+              </div>
+            ))}
+            {chatLoading && (
+              <div className="chat-msg assistant">
+                <div className="chat-bubble typing">
+                  <span></span><span></span><span></span>
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+          <div className="chat-input-row">
+            <input
+              type="text"
+              className="chat-input"
+              placeholder="Ask about your dynasty team..."
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && sendChat()}
+            />
+            <button className="chat-send" onClick={sendChat} disabled={chatLoading || !chatInput.trim()}>
+              ↑
+            </button>
+          </div>
+        </aside>
       </div>
     </div>
   );

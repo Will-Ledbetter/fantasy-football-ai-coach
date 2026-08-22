@@ -1,14 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { getCurrentUser, fetchAuthSession } from 'aws-amplify/auth';
 import Dashboard from './components/Dashboard';
+import DraftRoom from './components/DraftRoom';
+import FPLDraftRoom from './components/FPLDraftRoom';
 import Login from './components/Login';
 import Setup from './components/Setup';
+import Settings from './components/Settings';
 import './App.css';
 
 function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [hasLeague, setHasLeague] = useState(false);
+  const [view, setView] = useState('dashboard');
 
   useEffect(() => {
     checkUser();
@@ -18,7 +22,7 @@ function App() {
     try {
       const currentUser = await getCurrentUser();
       setUser(currentUser);
-      
+
       // Check if user has league configured
       const hasConfig = await checkLeagueConfig(currentUser.username);
       setHasLeague(hasConfig);
@@ -51,6 +55,16 @@ function App() {
     }
   }
 
+  function handleSignOut() {
+    setUser(null);
+    setView('dashboard');
+  }
+
+  function handleChangeLeague() {
+    setHasLeague(false);
+    setView('dashboard');
+  }
+
   if (loading) {
     return (
       <div className="loading-container">
@@ -65,10 +79,36 @@ function App() {
   }
 
   if (!hasLeague) {
-    return <Setup user={user} onComplete={() => setHasLeague(true)} />;
+    return <Setup user={user} onComplete={() => { setHasLeague(true); setView('dashboard'); }} />;
   }
 
-  return <Dashboard user={user} />;
+  if (view === 'settings') {
+    return (
+      <Settings
+        user={user}
+        onChangeLeague={handleChangeLeague}
+        onSignOut={handleSignOut}
+        onBack={() => setView('dashboard')}
+      />
+    );
+  }
+
+  if (view === 'nfl-draft') {
+    return <DraftRoom user={user} onBack={() => setView('dashboard')} />;
+  }
+
+  if (view === 'fpl-draft') {
+    return <FPLDraftRoom user={user} onBack={() => setView('dashboard')} />;
+  }
+
+  return (
+    <Dashboard 
+      user={user} 
+      onNavigateToSettings={() => setView('settings')} 
+      onNavigateToDraft={() => setView('nfl-draft')}
+      onNavigateToFPL={() => setView('fpl-draft')}
+    />
+  );
 }
 
 export default App;
