@@ -44,23 +44,36 @@ function DraftRoom({ user, onBack }) {
   const [error, setError] = useState('');
   const [strategy, setStrategy] = useState(localStorage.getItem('nflDraftStrategy') || 'balanced');
   const [recs, setRecs] = useState([]);
+  const [mockMode, setMockMode] = useState(false);
   const [strategyNote, setStrategyNote] = useState('');
   const [activeTab, setActiveTab] = useState('recs');
   const [posFilter, setPosFilter] = useState('ALL');
   const pollRef = useRef(null);
   const prevCountRef = useRef(0);
+  const draftIdRef = useRef(draftId);
+  const picksLengthRef = useRef(0);
+
+  // Keep refs in sync with state
+  useEffect(() => { draftIdRef.current = draftId; }, [draftId]);
+  useEffect(() => { picksLengthRef.current = picks.length; }, [picks]);
 
   useEffect(() => {
-    fetch(`${SLEEPER_API}/players/nfl`).then(r => r.json()).then(setPlayers).catch(console.error);
+    fetch(`${SLEEPER_API}/players/nfl`)
+      .then(r => {
+        if (!r.ok) throw new Error(`Players API returned ${r.status}`);
+        return r.json();
+      })
+      .then(setPlayers)
+      .catch(e => console.error('Failed to load players:', e));
   }, []);
 
   useEffect(() => {
-    if (connected && draftId) {
+    if (connected && draftId && !mockMode) {
       pollPicks();
       pollRef.current = setInterval(pollPicks, 3000);
       return () => clearInterval(pollRef.current);
     }
-  }, [connected, draftId]);
+  }, [connected, draftId, mockMode]);
 
   useEffect(() => {
     if (picks.length !== prevCountRef.current) {
@@ -70,10 +83,134 @@ function DraftRoom({ user, onBack }) {
   }, [picks, strategy, mySlot]);
 
   async function pollPicks() {
+    const did = draftIdRef.current;
+    if (!did) return;
     try {
-      const data = await fetch(`${SLEEPER_API}/draft/${draftId}/picks`).then(r => r.json());
-      if (Array.isArray(data) && data.length !== picks.length) setPicks(data);
+      const data = await fetch(`${SLEEPER_API}/draft/${did}/picks`).then(r => r.json());
+      if (Array.isArray(data) && data.length !== picksLengthRef.current) {
+        setPicks(data);
+      }
     } catch (e) { /* silent */ }
+  }
+
+  // ========== MOCK DRAFT MODE ==========
+  function startMockDraft(numTeams = 12, numRounds = 15, slot = 1) {
+    setMockMode(true);
+    setMySlot(slot);
+    localStorage.setItem('nflDraftMySlot', slot);
+    setDraft({
+      type: 'snake',
+      settings: { teams: numTeams, rounds: numRounds, roster_positions: ['QB','RB','RB','WR','WR','TE','FLEX','FLEX','K','DEF','BN','BN','BN','BN','BN'] },
+      league_id: null
+    });
+    setPicks([]);
+    setConnected(true);
+    setDraftId('mock');
+    draftIdRef.current = 'mock';
+  }
+
+  function mockSimulatePick() {
+    if (!players || !draft) return;
+    const numTeams = draft.settings.teams;
+    const totalPicks = numTeams * (draft.settings.rounds || 15);
+    if (picks.length >= totalPicks) return;
+
+    const round = Math.floor(picks.length / numTeams) + 1;
+    const pickInRound = picks.length % numTeams;
+    let draftSlot;
+    if (draft.type === 'snake') {
+      draftSlot = round % 2 === 1 ? pickInRound + 1 : numTeams - pickInRound;
+    } else {
+      draftSlot = pickInRound + 1;
+    }
+
+    // If it's my turn, don't auto-pick
+    if (draftSlot === mySlot) return;
+
+    const taken = new Set(picks.map(p => p.player_id));
+    const available = Object.entries(players)
+      .filter(([id, p]) => !taken.has(id) && p.active && ['QB','RB','WR','TE','K','DEF'].includes(p.position) && p.team)
+      .sort((a, b) => (a[1].search_rank || 9999) - (b[1].search_rank || 9999));
+
+    if (available.length === 0) return;
+
+    // Simulate some variance — pick from top 5 available with slight randomness
+    const poolSize = Math.min(5, available.length);
+    const pickIdx = Math.floor(Math.random() * poolSize);
+    const [playerId] = available[pickIdx];
+
+    const newPick = {
+      player_id: playerId,
+      round,
+      pick_no: pickInRound + 1,
+      draft_slot: draftSlot,
+      picked_by: `mock_team_${draftSlot}`
+    };
+    setPicks(prev => [...prev, newPick]);
+  }
+
+  function mockMakePick(playerId) {
+    if (!players || !draft) return;
+    const numTeams = draft.settings.teams;
+    const round = Math.floor(picks.length / numTeams) + 1;
+    const pickInRound = picks.length % numTeams;
+    let draftSlot;
+    if (draft.type === 'snake') {
+      draftSlot = round % 2 === 1 ? pickInRound + 1 : numTeams - pickInRound;
+    } else {
+      draftSlot = pickInRound + 1;
+    }
+
+    if (draftSlot !== mySlot) return; // Not my turn
+
+    const newPick = {
+      player_id: playerId,
+      round,
+      pick_no: pickInRound + 1,
+      draft_slot: draftSlot,
+      picked_by: 'me'
+    };
+    setPicks(prev => [...prev, newPick]);
+  }
+
+  function mockAutoAdvance() {
+    // Simulate all picks until it's my turn (or draft ends)
+    if (!players || !draft) return;
+    const numTeams = draft.settings.teams;
+    const totalPicks = numTeams * (draft.settings.rounds || 15);
+    let currentPicks = [...picks];
+
+    while (currentPicks.length < totalPicks) {
+      const round = Math.floor(currentPicks.length / numTeams) + 1;
+      const pickInRound = currentPicks.length % numTeams;
+      let draftSlot;
+      if (draft.type === 'snake') {
+        draftSlot = round % 2 === 1 ? pickInRound + 1 : numTeams - pickInRound;
+      } else {
+        draftSlot = pickInRound + 1;
+      }
+
+      if (draftSlot === mySlot) break; // Stop when it's my turn
+
+      const taken = new Set(currentPicks.map(p => p.player_id));
+      const available = Object.entries(players)
+        .filter(([id, p]) => !taken.has(id) && p.active && ['QB','RB','WR','TE','K','DEF'].includes(p.position) && p.team)
+        .sort((a, b) => (a[1].search_rank || 9999) - (b[1].search_rank || 9999));
+
+      if (available.length === 0) break;
+      const poolSize = Math.min(5, available.length);
+      const pickIdx = Math.floor(Math.random() * poolSize);
+      const [playerId] = available[pickIdx];
+
+      currentPicks.push({
+        player_id: playerId,
+        round,
+        pick_no: pickInRound + 1,
+        draft_slot: draftSlot,
+        picked_by: `mock_team_${draftSlot}`
+      });
+    }
+    setPicks(currentPicks);
   }
 
   async function connectToDraft() {
@@ -81,7 +218,9 @@ function DraftRoom({ user, onBack }) {
     try {
       let did = draftId;
       if (leagueId && !did) {
-        const drafts = await fetch(`${SLEEPER_API}/league/${leagueId}/drafts`).then(r => r.json());
+        const resp = await fetch(`${SLEEPER_API}/league/${leagueId}/drafts`);
+        if (!resp.ok) throw new Error(`League not found (${resp.status}). Check your League ID.`);
+        const drafts = await resp.json();
         if (!drafts?.length) throw new Error('No drafts found for this league');
         const active = drafts.find(d => d.status === 'drafting') || drafts[0];
         did = active.draft_id;
@@ -89,17 +228,21 @@ function DraftRoom({ user, onBack }) {
       }
       if (!did) throw new Error('Provide a League ID or Draft ID');
 
-      const draftData = await fetch(`${SLEEPER_API}/draft/${did}`).then(r => r.json());
+      const draftResp = await fetch(`${SLEEPER_API}/draft/${did}`);
+      if (!draftResp.ok) throw new Error(`Draft not found (${draftResp.status}). Check your Draft ID.`);
+      const draftData = await draftResp.json();
       setDraft(draftData);
 
       const lid = draftData.league_id || leagueId;
       if (lid) {
         setLeagueId(lid);
-        const users = await fetch(`${SLEEPER_API}/league/${lid}/users`).then(r => r.json());
+        const usersResp = await fetch(`${SLEEPER_API}/league/${lid}/users`);
+        const users = usersResp.ok ? await usersResp.json() : [];
         setLeagueUsers(users || []);
       }
 
-      const picksData = await fetch(`${SLEEPER_API}/draft/${did}/picks`).then(r => r.json());
+      const picksResp = await fetch(`${SLEEPER_API}/draft/${did}/picks`);
+      const picksData = picksResp.ok ? await picksResp.json() : [];
       setPicks(picksData || []);
       setConnected(true);
       localStorage.setItem('nflDraftLeagueId', lid || leagueId);
@@ -123,6 +266,7 @@ function DraftRoom({ user, onBack }) {
     return counts;
   }
   function getDrafterName(pick) {
+    if (mockMode) return pick.picked_by === 'me' ? '★ You' : `Team ${pick.draft_slot}`;
     const u = leagueUsers.find(u => u.user_id === pick.picked_by);
     return u?.metadata?.team_name || u?.display_name || `Slot ${pick.draft_slot}`;
   }
@@ -181,6 +325,7 @@ function DraftRoom({ user, onBack }) {
     setRecs(scored.slice(0, 20));
 
     // Strategy note
+    const roundIdx = Math.min(round - 1, 9);
     let note = isMyTurn() ? '🟢 YOUR PICK NOW!\n\n' : '';
     note += `📋 ${strat.name}\n`;
     note += `Round ${round} of ${totalRounds}\n\n`;
@@ -249,6 +394,11 @@ function DraftRoom({ user, onBack }) {
             <button className="connect-btn" onClick={connectToDraft} disabled={loading || (!leagueId && !draftId)}>
               {loading ? 'Connecting...' : '⚡ Connect to Draft'}
             </button>
+            {!leagueId && !draftId && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '6px' }}>Enter a League ID or Draft ID above to connect</div>}
+            <div style={{ textAlign: 'center', margin: '16px 0 8px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>— or —</div>
+            <button className="connect-btn" style={{ background: 'var(--bg-card)', color: 'var(--gold)', border: '1px solid var(--gold)' }} onClick={() => startMockDraft(12, 15, 1)}>
+              🧪 Start Mock Draft (12-team, pick your slot next)
+            </button>
           </div>
         </div>
       </div>
@@ -262,7 +412,7 @@ function DraftRoom({ user, onBack }) {
         <div className="draft-header-left">
           <button className="back-btn" onClick={onBack}>←</button>
           <h1>Draft Room</h1>
-          <span className="live-badge">● LIVE</span>
+          <span className="live-badge" style={mockMode ? { background: '#f59e0b' } : undefined}>{mockMode ? '🧪 MOCK' : '● LIVE'}</span>
         </div>
         <div className="draft-header-right">
           <span className="draft-info">
@@ -278,6 +428,16 @@ function DraftRoom({ user, onBack }) {
             </select>
           )}
           {mySlot && <span className="my-slot-badge">Slot #{mySlot}</span>}
+          {mockMode && !isMyTurn() && (
+            <button className="change-strat-btn" onClick={mockAutoAdvance} style={{ background: '#10b981', color: '#fff', borderColor: '#10b981' }}>
+              ▶ Sim to My Pick
+            </button>
+          )}
+          {mockMode && !isMyTurn() && (
+            <button className="change-strat-btn" onClick={mockSimulatePick}>
+              ⏭ Next Pick
+            </button>
+          )}
           <button className="change-strat-btn" onClick={() => {
             const keys = Object.keys(STRATEGIES);
             const current = keys.indexOf(strategy);
@@ -325,7 +485,10 @@ function DraftRoom({ user, onBack }) {
                 <div className="recs-list">
                   {filteredRecs.length === 0 && <div className="waiting-msg">Recommendations appear once the draft starts</div>}
                   {filteredRecs.slice(0, 15).map((rec, i) => (
-                    <div key={rec.playerId} className={`rec-card ${i === 0 ? 'top-pick' : ''}`}>
+                    <div key={rec.playerId} className={`rec-card ${i === 0 ? 'top-pick' : ''}`}
+                      onClick={mockMode && isMyTurn() ? () => mockMakePick(rec.playerId) : undefined}
+                      style={mockMode && isMyTurn() ? { cursor: 'pointer' } : undefined}
+                    >
                       <div className="rec-header">
                         <span className={`rec-pos pos-${rec.position.toLowerCase()}`}>{rec.position}</span>
                         <span className="rec-name">{rec.name}</span>
@@ -337,6 +500,7 @@ function DraftRoom({ user, onBack }) {
                       </div>
                       {i === 0 && <div className="rec-tag">★ Top Pick</div>}
                       {rec.reason && <div className="rec-reason">{rec.reason}</div>}
+                      {mockMode && isMyTurn() && <div className="rec-reason" style={{ color: '#10b981' }}>⬆ Click to draft</div>}
                     </div>
                   ))}
                 </div>
