@@ -38,6 +38,7 @@ function DraftRoom({ user, onBack }) {
   const [picks, setPicks] = useState([]);
   const [players, setPlayers] = useState(null);
   const [leagueUsers, setLeagueUsers] = useState([]);
+  const [leagueRosters, setLeagueRosters] = useState([]);
   const [mySlot, setMySlot] = useState(parseInt(localStorage.getItem('nflDraftMySlot')) || null);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -48,6 +49,7 @@ function DraftRoom({ user, onBack }) {
   const [strategyNote, setStrategyNote] = useState('');
   const [activeTab, setActiveTab] = useState('recs');
   const [posFilter, setPosFilter] = useState('ALL');
+  const [refreshing, setRefreshing] = useState(false);
   const pollRef = useRef(null);
   const prevCountRef = useRef(0);
   const draftIdRef = useRef(draftId);
@@ -222,6 +224,7 @@ function DraftRoom({ user, onBack }) {
         if (!resp.ok) throw new Error(`League not found (${resp.status}). Check your League ID.`);
         const drafts = await resp.json();
         if (!drafts?.length) throw new Error('No drafts found for this league');
+        // Prefer actively drafting, then most recent
         const active = drafts.find(d => d.status === 'drafting') || drafts[0];
         did = active.draft_id;
         setDraftId(did);
@@ -236,9 +239,15 @@ function DraftRoom({ user, onBack }) {
       const lid = draftData.league_id || leagueId;
       if (lid) {
         setLeagueId(lid);
-        const usersResp = await fetch(`${SLEEPER_API}/league/${lid}/users`);
+        // Fetch users and rosters in parallel
+        const [usersResp, rostersResp] = await Promise.all([
+          fetch(`${SLEEPER_API}/league/${lid}/users`),
+          fetch(`${SLEEPER_API}/league/${lid}/rosters`)
+        ]);
         const users = usersResp.ok ? await usersResp.json() : [];
+        const rosters = rostersResp.ok ? await rostersResp.json() : [];
         setLeagueUsers(users || []);
+        setLeagueRosters(rosters || []);
       }
 
       const picksResp = await fetch(`${SLEEPER_API}/draft/${did}/picks`);
@@ -246,8 +255,23 @@ function DraftRoom({ user, onBack }) {
       setPicks(picksData || []);
       setConnected(true);
       localStorage.setItem('nflDraftLeagueId', lid || leagueId);
+      localStorage.setItem('nflDraftId', did);
     } catch (e) { setError(e.message); }
     setLoading(false);
+  }
+
+  // Manual refresh — force re-fetch picks from API
+  async function manualRefresh() {
+    const did = draftIdRef.current;
+    if (!did || did === 'mock') return;
+    setRefreshing(true);
+    try {
+      const data = await fetch(`${SLEEPER_API}/draft/${did}/picks`).then(r => r.json());
+      if (Array.isArray(data)) {
+        setPicks(data);
+      }
+    } catch (e) { /* silent */ }
+    setRefreshing(false);
   }
 
   function getCurrentRound() { return draft ? Math.floor(picks.length / draft.settings.teams) + 1 : 1; }
@@ -267,8 +291,74 @@ function DraftRoom({ user, onBack }) {
   }
   function getDrafterName(pick) {
     if (mockMode) return pick.picked_by === 'me' ? '★ You' : `Team ${pick.draft_slot}`;
-    const u = leagueUsers.find(u => u.user_id === pick.picked_by);
-    return u?.metadata?.team_name || u?.display_name || `Slot ${pick.draft_slot}`;
+    
+    // Try to find user by picked_by (user_id) first
+    if (pick.picked_by) {
+      const u = leagueUsers.find(u => u.user_id === pick.picked_by);
+      if (u) return u.metadata?.team_name || u.display_name || u.username || `Slot ${pick.draft_slot}`;
+    }
+    
+    // Try via roster_id → owner_id → user
+    if (pick.roster_id) {
+      const roster = leagueRosters.find(r => String(r.roster_id) === String(pick.roster_id));
+      if (roster?.owner_id) {
+        const u = leagueUsers.find(u => u.user_id === roster.owner_id);
+        if (u) return u.metadata?.team_name || u.display_name || u.username || `Slot ${pick.draft_slot}`;
+      }
+    }
+    
+    // Try via draft.slot_to_roster_id → roster → user
+    if (draft?.slot_to_roster_id && pick.draft_slot) {
+      const rosterId = draft.slot_to_roster_id[String(pick.draft_slot)];
+      if (rosterId) {
+        const roster = leagueRosters.find(r => String(r.roster_id) === String(rosterId));
+        if (roster?.owner_id) {
+          const u = leagueUsers.find(u => u.user_id === roster.owner_id);
+          if (u) return u.metadata?.team_name || u.display_name || u.username || `Slot ${pick.draft_slot}`;
+        }
+      }
+    }
+
+    // Try via draft_order (user_id → slot mapping, reversed)
+    if (draft?.draft_order) {
+      const userId = Object.entries(draft.draft_order).find(([uid, slot]) => slot === pick.draft_slot)?.[0];
+      if (userId) {
+        const u = leagueUsers.find(u => u.user_id === userId);
+        if (u) return u.metadata?.team_name || u.display_name || u.username || `Slot ${pick.draft_slot}`;
+      }
+    }
+
+    return `Slot ${pick.draft_slot}`;
+  }
+
+  // Helper to get team name for a draft slot (for header display)
+  function getSlotTeamNames() {
+    if (!draft || !leagueUsers.length) return {};
+    const names = {};
+    const numTeams = draft.settings?.teams || 12;
+    for (let slot = 1; slot <= numTeams; slot++) {
+      // Try draft_order first
+      if (draft.draft_order) {
+        const userId = Object.entries(draft.draft_order).find(([uid, s]) => s === slot)?.[0];
+        if (userId) {
+          const u = leagueUsers.find(u => u.user_id === userId);
+          if (u) { names[slot] = u.metadata?.team_name || u.display_name || `Team ${slot}`; continue; }
+        }
+      }
+      // Try slot_to_roster_id
+      if (draft.slot_to_roster_id) {
+        const rosterId = draft.slot_to_roster_id[String(slot)];
+        if (rosterId) {
+          const roster = leagueRosters.find(r => String(r.roster_id) === String(rosterId));
+          if (roster?.owner_id) {
+            const u = leagueUsers.find(u => u.user_id === roster.owner_id);
+            if (u) { names[slot] = u.metadata?.team_name || u.display_name || `Team ${slot}`; continue; }
+          }
+        }
+      }
+      names[slot] = `Team ${slot}`;
+    }
+    return names;
   }
 
   function generateRecs() {
@@ -406,6 +496,9 @@ function DraftRoom({ user, onBack }) {
   }
 
   // ========== DRAFT ROOM ==========
+  const slotNames = getSlotTeamNames();
+  const draftType = draft?.type === 'snake' ? '🐍 Snake' : draft?.type === 'linear' ? '➡️ Linear' : draft?.type || '';
+
   return (
     <div className="draft-room">
       <div className="draft-header">
@@ -413,6 +506,7 @@ function DraftRoom({ user, onBack }) {
           <button className="back-btn" onClick={onBack}>←</button>
           <h1>Draft Room</h1>
           <span className="live-badge" style={mockMode ? { background: '#f59e0b' } : undefined}>{mockMode ? '🧪 MOCK' : '● LIVE'}</span>
+          {draftType && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginLeft: '8px' }}>{draftType}</span>}
         </div>
         <div className="draft-header-right">
           <span className="draft-info">
@@ -423,11 +517,16 @@ function DraftRoom({ user, onBack }) {
             <select onChange={e => handleSetSlot(e.target.value)} defaultValue="">
               <option value="" disabled>Set my slot</option>
               {Array.from({ length: draft.settings.teams }, (_, i) => (
-                <option key={i+1} value={i+1}>Slot {i+1}</option>
+                <option key={i+1} value={i+1}>{slotNames[i+1] || `Slot ${i+1}`}</option>
               ))}
             </select>
           )}
-          {mySlot && <span className="my-slot-badge">Slot #{mySlot}</span>}
+          {mySlot && <span className="my-slot-badge">{slotNames[mySlot] || `Slot #${mySlot}`}</span>}
+          {!mockMode && (
+            <button className="change-strat-btn" onClick={manualRefresh} disabled={refreshing} style={refreshing ? { opacity: 0.5 } : undefined}>
+              {refreshing ? '⟳ ...' : '🔄 Refresh'}
+            </button>
+          )}
           {mockMode && !isMyTurn() && (
             <button className="change-strat-btn" onClick={mockAutoAdvance} style={{ background: '#10b981', color: '#fff', borderColor: '#10b981' }}>
               ▶ Sim to My Pick
@@ -450,17 +549,17 @@ function DraftRoom({ user, onBack }) {
 
       <div className="draft-layout">
         <div className="draft-board-section">
-          <h2>Draft Board — {picks.length} picks made</h2>
+          <h2>Draft Board — {picks.length} picks made {draft && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({draft.settings.teams} teams, {draft.settings.rounds || 15} rounds)</span>}</h2>
           <div className="draft-picks-list">
-            {picks.length === 0 && <div className="waiting-msg">Waiting for draft to start...</div>}
+            {picks.length === 0 && <div className="waiting-msg">{mockMode ? 'Click "Sim to My Pick" or "Next Pick" to start' : 'Waiting for draft to start...'}</div>}
             {[...picks].reverse().map((pick, i) => {
               const pl = players?.[pick.player_id];
               return (
                 <div key={i} className={`pick-row ${pick.draft_slot === mySlot ? 'my-pick' : ''}`}>
-                  <span className="pick-num">{pick.round}.{pick.pick_no || pick.draft_slot}</span>
+                  <span className="pick-num">{pick.round}.{String(pick.pick_no || pick.draft_slot).padStart(2, '0')}</span>
                   <span className={`pick-pos pos-${(pl?.position || '').toLowerCase()}`}>{pl?.position || '??'}</span>
-                  <span className="pick-player">{pl ? `${pl.first_name} ${pl.last_name}` : pick.player_id}</span>
-                  <span className="pick-team">{pl?.team || ''}</span>
+                  <span className="pick-player">{pl ? `${pl.first_name} ${pl.last_name}` : pick.metadata?.first_name ? `${pick.metadata.first_name} ${pick.metadata.last_name}` : pick.player_id}</span>
+                  <span className="pick-team">{pl?.team || pick.metadata?.team || ''}</span>
                   <span className="pick-drafter">{getDrafterName(pick)}</span>
                 </div>
               );
