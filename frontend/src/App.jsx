@@ -3,6 +3,7 @@ import { getCurrentUser, fetchAuthSession } from 'aws-amplify/auth';
 import Dashboard from './components/Dashboard';
 import DraftRoom from './components/DraftRoom';
 import FPLDraftRoom from './components/FPLDraftRoom';
+import FPLCommandCenter from './components/FPLCommandCenter';
 import Login from './components/Login';
 import Setup from './components/Setup';
 import Settings from './components/Settings';
@@ -101,12 +102,17 @@ function App() {
     return <FPLDraftRoom user={user} onBack={() => setView('dashboard')} />;
   }
 
+  if (view === 'fpl-center') {
+    return <FPLCommandCenter user={user} onBack={() => setView('dashboard')} />;
+  }
+
   return (
     <Dashboard 
       user={user} 
       onNavigateToSettings={() => setView('settings')} 
       onNavigateToDraft={() => setView('nfl-draft')}
       onNavigateToFPL={() => setView('fpl-draft')}
+      onNavigateToFPLCenter={() => setView('fpl-center')}
     />
   );
 }

@@ -5,7 +5,7 @@ import GradeGauge, { PositionGrades } from './GradeGauge';
 import MOCK_DATASETS from './mockAnalysis';
 import './Dashboard.css';
 
-function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateToFPL }) {
+function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateToFPL, onNavigateToFPLCenter }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
@@ -165,6 +165,7 @@ function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateTo
         <div className="dash-actions">
           <button className="btn btn-secondary" onClick={onNavigateToDraft}>🏈 NFL Draft</button>
           <button className="btn btn-secondary" onClick={onNavigateToFPL}>⚽ FPL Draft</button>
+          <button className="btn btn-secondary" onClick={onNavigateToFPLCenter}>⚽ FPL Center</button>
           <button className="btn btn-secondary" onClick={onNavigateToSettings}>Settings</button>
           <button className="btn btn-secondary" onClick={async () => { await signOut(); window.location.reload(); }}>Sign Out</button>
         </div>
