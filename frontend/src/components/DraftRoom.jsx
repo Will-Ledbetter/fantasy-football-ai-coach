@@ -119,6 +119,7 @@ function DraftRoom({ user, onBack }) {
 
     const round = Math.floor(picks.length / numTeams) + 1;
     const pickInRound = picks.length % numTeams;
+    // Snake: odd rounds go 1→N, even rounds go N→1
     let draftSlot;
     if (draft.type === 'snake') {
       draftSlot = round % 2 === 1 ? pickInRound + 1 : numTeams - pickInRound;
@@ -276,12 +277,23 @@ function DraftRoom({ user, onBack }) {
 
   function getCurrentRound() { return draft ? Math.floor(picks.length / draft.settings.teams) + 1 : 1; }
   function getCurrentPick() { return draft ? (picks.length % draft.settings.teams) + 1 : 1; }
+  
+  // Get which draft_slot is currently on the clock
+  function getCurrentPickOnClockSlot() {
+    if (!draft) return 1;
+    const numTeams = draft.settings.teams;
+    const round = getCurrentRound();
+    const pickInRound = picks.length % numTeams;
+    if (draft.type === 'snake') {
+      // Odd rounds (1,3,5) go 1→N, even rounds (2,4,6) go N→1
+      return round % 2 === 1 ? pickInRound + 1 : numTeams - pickInRound;
+    }
+    return pickInRound + 1;
+  }
+
   function isMyTurn() {
     if (!draft || !mySlot) return false;
-    const round = getCurrentRound();
-    const pickInRound = picks.length % draft.settings.teams;
-    if (draft.type === 'snake') return round % 2 === 1 ? (pickInRound + 1) === mySlot : (draft.settings.teams - pickInRound) === mySlot;
-    return (pickInRound + 1) === mySlot;
+    return getCurrentPickOnClockSlot() === mySlot;
   }
   function getMyPicks() { return mySlot ? picks.filter(p => p.draft_slot === mySlot) : []; }
   function getSquadCounts() {
@@ -562,18 +574,30 @@ function DraftRoom({ user, onBack }) {
               {/* Grid rows */}
               {Array.from({ length: draft?.settings?.rounds || 15 }, (_, r) => {
                 const numTeams = draft?.settings?.teams || 12;
+                const roundNum = r + 1;
                 return (
                   <React.Fragment key={r}>
-                    <div className="fpl-cell fpl-round">{r + 1}</div>
+                    <div className="fpl-cell fpl-round">{roundNum}</div>
                     {Array.from({ length: numTeams }, (_, col) => {
-                      // Snake: even rounds go left-to-right, odd rounds go right-to-left
-                      const overallPick = r % 2 === 0 ? r * numTeams + col : r * numTeams + (numTeams - 1 - col);
-                      const pick = picks[overallPick];
+                      // In a snake draft, columns represent draft slots
+                      // Even rounds (1,3,5...): slot 1 is leftmost (col 0)
+                      // Odd rounds (2,4,6...): slot 1 is rightmost (col = numTeams-1)
+                      // But we keep columns fixed per team — each column IS a draft_slot
                       const slotForCell = col + 1;
+                      
+                      // Find the pick for this round + draft_slot
+                      const pick = picks.find(p => p.round === roundNum && p.draft_slot === slotForCell);
+                      
                       const isMe = slotForCell === mySlot;
-                      const isCurrent = overallPick === picks.length; // next pick to be made
+                      // Determine if this is the current on-the-clock cell
+                      // The next pick's position is based on total picks made
+                      const picksMadeInRound = picks.filter(p => p.round === roundNum).length;
+                      const currentRound = getCurrentRound();
+                      const currentPickSlot = getCurrentPickOnClockSlot();
+                      const isCurrent = roundNum === currentRound && slotForCell === currentPickSlot && !pick;
+                      
                       const pl = pick ? players?.[pick.player_id] : null;
-                      const playerName = pl ? `${pl.first_name?.[0]}. ${pl.last_name}` : pick?.metadata?.last_name || '';
+                      const playerName = pl ? `${pl.first_name?.[0]}. ${pl.last_name}` : pick?.metadata?.last_name ? `${pick.metadata.first_name?.[0] || ''}. ${pick.metadata.last_name}` : '';
                       const pos = pl?.position || pick?.metadata?.position || '';
 
                       return (
@@ -586,7 +610,7 @@ function DraftRoom({ user, onBack }) {
                               <span className={`fpl-pick-name pos-${pos.toLowerCase()}`}>{playerName}</span>
                             </div>
                           ) : (
-                            <span className="fpl-pick-empty">{r+1}.{col+1}</span>
+                            <span className="fpl-pick-empty">{roundNum}.{String(slotForCell).padStart(2, '0')}</span>
                           )}
                         </div>
                       );
