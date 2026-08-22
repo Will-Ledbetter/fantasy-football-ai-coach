@@ -275,20 +275,38 @@ function DraftRoom({ user, onBack }) {
     setRefreshing(false);
   }
 
-  function getCurrentRound() { return draft ? Math.floor(picks.length / draft.settings.teams) + 1 : 1; }
-  function getCurrentPick() { return draft ? (picks.length % draft.settings.teams) + 1 : 1; }
+  // Determine current round/pick based on actual pick data from Sleeper
+  // pick_no is the overall pick number (1-based), round is the round number
+  function getCurrentRound() {
+    if (!draft) return 1;
+    if (picks.length === 0) return 1;
+    const lastPick = picks[picks.length - 1];
+    const numTeams = draft.settings.teams;
+    // If the last round is full, we're in the next round
+    const picksInLastRound = picks.filter(p => p.round === lastPick.round).length;
+    if (picksInLastRound >= numTeams) return lastPick.round + 1;
+    return lastPick.round;
+  }
+  
+  function getCurrentPick() {
+    if (!draft) return 1;
+    if (picks.length === 0) return 1;
+    const round = getCurrentRound();
+    const picksInRound = picks.filter(p => p.round === round).length;
+    return picksInRound + 1;
+  }
   
   // Get which draft_slot is currently on the clock
   function getCurrentPickOnClockSlot() {
     if (!draft) return 1;
     const numTeams = draft.settings.teams;
     const round = getCurrentRound();
-    const pickInRound = picks.length % numTeams;
+    const picksInRound = picks.filter(p => p.round === round).length;
     if (draft.type === 'snake') {
       // Odd rounds (1,3,5) go 1→N, even rounds (2,4,6) go N→1
-      return round % 2 === 1 ? pickInRound + 1 : numTeams - pickInRound;
+      return round % 2 === 1 ? picksInRound + 1 : numTeams - picksInRound;
     }
-    return pickInRound + 1;
+    return picksInRound + 1;
   }
 
   function isMyTurn() {
@@ -579,10 +597,6 @@ function DraftRoom({ user, onBack }) {
                   <React.Fragment key={r}>
                     <div className="fpl-cell fpl-round">{roundNum}</div>
                     {Array.from({ length: numTeams }, (_, col) => {
-                      // In a snake draft, columns represent draft slots
-                      // Even rounds (1,3,5...): slot 1 is leftmost (col 0)
-                      // Odd rounds (2,4,6...): slot 1 is rightmost (col = numTeams-1)
-                      // But we keep columns fixed per team — each column IS a draft_slot
                       const slotForCell = col + 1;
                       
                       // Find the pick for this round + draft_slot
@@ -590,8 +604,6 @@ function DraftRoom({ user, onBack }) {
                       
                       const isMe = slotForCell === mySlot;
                       // Determine if this is the current on-the-clock cell
-                      // The next pick's position is based on total picks made
-                      const picksMadeInRound = picks.filter(p => p.round === roundNum).length;
                       const currentRound = getCurrentRound();
                       const currentPickSlot = getCurrentPickOnClockSlot();
                       const isCurrent = roundNum === currentRound && slotForCell === currentPickSlot && !pick;
@@ -599,6 +611,16 @@ function DraftRoom({ user, onBack }) {
                       const pl = pick ? players?.[pick.player_id] : null;
                       const playerName = pl ? `${pl.first_name?.[0]}. ${pl.last_name}` : pick?.metadata?.last_name ? `${pick.metadata.first_name?.[0] || ''}. ${pick.metadata.last_name}` : '';
                       const pos = pl?.position || pick?.metadata?.position || '';
+
+                      // Calculate the pick order number for this cell (snake numbering)
+                      // Odd rounds (1,3,5): slot 1 picks first → pickOrder = slot
+                      // Even rounds (2,4,6): slot N picks first → pickOrder = N - slot + 1
+                      let pickOrder;
+                      if (draft?.type === 'snake') {
+                        pickOrder = roundNum % 2 === 1 ? slotForCell : numTeams - slotForCell + 1;
+                      } else {
+                        pickOrder = slotForCell;
+                      }
 
                       return (
                         <div
@@ -610,7 +632,7 @@ function DraftRoom({ user, onBack }) {
                               <span className={`fpl-pick-name pos-${pos.toLowerCase()}`}>{playerName}</span>
                             </div>
                           ) : (
-                            <span className="fpl-pick-empty">{roundNum}.{String(slotForCell).padStart(2, '0')}</span>
+                            <span className="fpl-pick-empty">{roundNum}.{String(pickOrder).padStart(2, '0')}</span>
                           )}
                         </div>
                       );
