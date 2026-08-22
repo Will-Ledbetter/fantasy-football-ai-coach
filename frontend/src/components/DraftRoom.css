@@ -259,7 +259,7 @@
 /* ===== FPL Draft Board Grid ===== */
 .fpl-board { overflow-x: auto; }
 .fpl-board-grid { display: grid; grid-template-columns: 36px repeat(8, 1fr); gap: 2px; font-size: 0.72rem; min-width: 600px; }
-.fpl-cell { padding: 6px 3px; text-align: center; border-radius: 4px; min-height: 38px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; background: var(--bg-card-glass); }
+.fpl-cell { padding: 5px 2px; text-align: center; border-radius: 4px; min-height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; background: var(--bg-card-glass); }
 .fpl-cell.fpl-header { background: var(--bg-primary); font-weight: 700; color: var(--text-muted); font-size: 0.68rem; cursor: default; }
 .fpl-cell.fpl-header.fpl-my-col { color: var(--gold); border-color: var(--gold); }
 .fpl-cell.fpl-round { background: var(--bg-primary); font-weight: 700; color: var(--text-muted); cursor: default; }

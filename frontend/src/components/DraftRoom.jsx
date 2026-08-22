@@ -549,21 +549,52 @@ function DraftRoom({ user, onBack }) {
 
       <div className="draft-layout">
         <div className="draft-board-section">
-          <h2>Draft Board — {picks.length} picks made {draft && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({draft.settings.teams} teams, {draft.settings.rounds || 15} rounds)</span>}</h2>
-          <div className="draft-picks-list">
-            {picks.length === 0 && <div className="waiting-msg">{mockMode ? 'Click "Sim to My Pick" or "Next Pick" to start' : 'Waiting for draft to start...'}</div>}
-            {[...picks].reverse().map((pick, i) => {
-              const pl = players?.[pick.player_id];
-              return (
-                <div key={i} className={`pick-row ${pick.draft_slot === mySlot ? 'my-pick' : ''}`}>
-                  <span className="pick-num">{pick.round}.{String(pick.pick_no || pick.draft_slot).padStart(2, '0')}</span>
-                  <span className={`pick-pos pos-${(pl?.position || '').toLowerCase()}`}>{pl?.position || '??'}</span>
-                  <span className="pick-player">{pl ? `${pl.first_name} ${pl.last_name}` : pick.metadata?.first_name ? `${pick.metadata.first_name} ${pick.metadata.last_name}` : pick.player_id}</span>
-                  <span className="pick-team">{pl?.team || pick.metadata?.team || ''}</span>
-                  <span className="pick-drafter">{getDrafterName(pick)}</span>
+          <h2>Draft Board — {picks.length} picks {draft && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>({draft.settings.teams} teams, {draft.settings.rounds || 15} rounds)</span>}</h2>
+          <div className="fpl-board">
+            <div className="fpl-board-grid" style={{ gridTemplateColumns: `36px repeat(${draft?.settings?.teams || 12}, 1fr)` }}>
+              {/* Header row */}
+              <div className="fpl-cell fpl-header">RD</div>
+              {Array.from({ length: draft?.settings?.teams || 12 }, (_, i) => (
+                <div key={i} className={`fpl-cell fpl-header ${i + 1 === mySlot ? 'fpl-my-col' : ''}`}>
+                  {i + 1 === mySlot ? `★` : ''}{slotNames[i+1] ? slotNames[i+1].substring(0, 8) : `T${i+1}`}
                 </div>
-              );
-            })}
+              ))}
+              {/* Grid rows */}
+              {Array.from({ length: draft?.settings?.rounds || 15 }, (_, r) => {
+                const numTeams = draft?.settings?.teams || 12;
+                return (
+                  <React.Fragment key={r}>
+                    <div className="fpl-cell fpl-round">{r + 1}</div>
+                    {Array.from({ length: numTeams }, (_, col) => {
+                      // Snake: even rounds go left-to-right, odd rounds go right-to-left
+                      const overallPick = r % 2 === 0 ? r * numTeams + col : r * numTeams + (numTeams - 1 - col);
+                      const pick = picks[overallPick];
+                      const slotForCell = col + 1;
+                      const isMe = slotForCell === mySlot;
+                      const isCurrent = overallPick === picks.length; // next pick to be made
+                      const pl = pick ? players?.[pick.player_id] : null;
+                      const playerName = pl ? `${pl.first_name?.[0]}. ${pl.last_name}` : pick?.metadata?.last_name || '';
+                      const pos = pl?.position || pick?.metadata?.position || '';
+
+                      return (
+                        <div
+                          key={col}
+                          className={`fpl-cell ${isMe ? 'fpl-my-col' : ''} ${isCurrent ? 'fpl-current' : ''} ${pick ? 'fpl-filled' : ''}`}
+                        >
+                          {pick ? (
+                            <div className="fpl-pick-content">
+                              <span className={`fpl-pick-name pos-${pos.toLowerCase()}`}>{playerName}</span>
+                            </div>
+                          ) : (
+                            <span className="fpl-pick-empty">{r+1}.{col+1}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </React.Fragment>
+                );
+              })}
+            </div>
           </div>
         </div>
 
