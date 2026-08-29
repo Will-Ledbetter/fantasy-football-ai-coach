@@ -21,6 +21,11 @@ function App() {
 
   async function checkUser() {
     try {
+      // Attempt to restore/refresh the session first. If the access token has
+      // expired but a valid refresh token exists, this keeps the user signed in.
+      const session = await fetchAuthSession();
+      if (!session.tokens) throw new Error('No valid session');
+
       const currentUser = await getCurrentUser();
       setUser(currentUser);
 
@@ -29,6 +34,7 @@ function App() {
       setHasLeague(hasConfig);
     } catch (error) {
       console.log('Not authenticated', error);
+      setUser(null);
     } finally {
       setLoading(false);
     }
