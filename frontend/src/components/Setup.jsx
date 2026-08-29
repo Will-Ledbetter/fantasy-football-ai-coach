@@ -47,24 +47,36 @@ function Setup({ user, onComplete, onCancel, addingLeague = false }) {
   }, []);
 
   async function lookupSleeperUser() {
-    if (!sleeperUsername.trim()) { setError('Enter your Sleeper username'); return; }
+    const rawUsername = sleeperUsername.trim();
+    if (!rawUsername) { setError('Enter your Sleeper username'); return; }
     setError(''); setLoading(true);
     try {
-      const userRes = await fetch(`https://api.sleeper.app/v1/user/${sleeperUsername.trim()}`);
-      if (!userRes.ok) throw new Error('Username not found on Sleeper');
-      const userData = await userRes.json();
-      if (!userData?.user_id) throw new Error('Username not found on Sleeper');
+      // Sleeper usernames are lowercase and must be URL-encoded (handles spaces/symbols)
+      const lookup = encodeURIComponent(rawUsername.toLowerCase());
+      const userRes = await fetch(`https://api.sleeper.app/v1/user/${lookup}`);
+      // Sleeper returns 200 with "null" body for a username that doesn't exist
+      const userData = userRes.ok ? await userRes.json() : null;
+      if (!userData || !userData.user_id) {
+        throw new Error(`"${rawUsername}" not found on Sleeper. Use your Sleeper username (not display name), and check for typos.`);
+      }
       setSleeperUserId(userData.user_id);
 
       const year = new Date().getFullYear();
       const yearsToCheck = [year, year + 1, year - 1];
       let allLeagues = [];
       for (const y of yearsToCheck) {
-        const res = await fetch(`https://api.sleeper.app/v1/user/${userData.user_id}/leagues/nfl/${y}`);
-        const data = await res.json();
-        if (data && data.length > 0) allLeagues = [...allLeagues, ...data];
+        try {
+          const res = await fetch(`https://api.sleeper.app/v1/user/${userData.user_id}/leagues/nfl/${y}`);
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            // Avoid duplicates across seasons (same league_id can appear)
+            const existingIds = new Set(allLeagues.map(l => l.league_id));
+            allLeagues = [...allLeagues, ...data.filter(l => !existingIds.has(l.league_id))];
+          }
+        } catch { /* skip year on error */ }
       }
-      if (allLeagues.length === 0) throw new Error(`No NFL leagues found for @${sleeperUsername.trim()}`);
+      if (allLeagues.length === 0) throw new Error(`No NFL leagues found for @${rawUsername}. Make sure you have a league on Sleeper for this season.`);
       setLeagues(allLeagues);
       setStep(3);
     } catch (err) { setError(err.message); }
