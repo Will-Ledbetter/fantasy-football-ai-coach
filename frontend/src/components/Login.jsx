@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
-import { signIn, signUp, confirmSignUp, resendSignUpCode } from 'aws-amplify/auth';
+import { signIn, signUp, confirmSignUp, resendSignUpCode, signOut, resetPassword, confirmResetPassword } from 'aws-amplify/auth';
 import './Login.css';
 
 function Login({ onLogin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [needsVerification, setNeedsVerification] = useState(false);
+  const [code, setCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [mode, setMode] = useState('signIn');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -15,170 +15,111 @@ function Login({ onLogin }) {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
-      if (needsVerification) {
-        // Verify the code
-        await confirmSignUp({
-          username: email,
-          confirmationCode: verificationCode
-        });
-        setNeedsVerification(false);
-        setIsSignUp(false);
-        alert('Email verified! You can now sign in.');
-        setVerificationCode('');
-      } else if (isSignUp) {
-        await signUp({
-          username: email,
-          password: password,
-          options: {
-            userAttributes: { email: email }
-          }
-        });
-        setNeedsVerification(true);
+      if (mode === 'verify') {
+        await confirmSignUp({ username: email, confirmationCode: code });
+        setMode('signIn');
+        alert('Email verified. You can now sign in.');
+      } else if (mode === 'forgotPassword') {
+        await resetPassword({ username: email });
+        setMode('resetPassword');
+        alert('Check your email for the reset code.');
+      } else if (mode === 'resetPassword') {
+        await confirmResetPassword({ username: email, confirmationCode: code, newPassword });
+        setMode('signIn');
+        setCode(''); setNewPassword('');
+        alert('Password reset. Sign in with your new password.');
+      } else if (mode === 'signUp') {
+        await signUp({ username: email, password, options: { userAttributes: { email } } });
+        setMode('verify');
       } else {
-        await signIn({ username: email, password });
+        try { await signOut({ global: false }); } catch {}
+        await signIn({ username: email, password, options: { authFlowType: 'USER_PASSWORD_AUTH' } });
         onLogin();
       }
     } catch (err) {
-      const errorMessage = err.message || 'An error occurred';
-      console.error('Auth error:', err);
-      
-      // Handle different error cases
-      if (isSignUp && (errorMessage.includes('already exists') || errorMessage.includes('UsernameExistsException'))) {
-        // Check if it's an unverified account
-        if (errorMessage.includes('not confirmed') || errorMessage.includes('User is not confirmed')) {
-          setError('This account exists but needs verification. Click "Resend Code" below.');
-          setNeedsVerification(true);
-        } else {
-          // Account exists and is verified - tell them to sign in
-          setError('This account already exists. Please sign in instead.');
-          setIsSignUp(false);
-        }
-      } else if (!isSignUp && errorMessage.includes('not confirmed')) {
-        // Trying to sign in but not verified
-        setError('Please verify your email first. Click "Resend Code" below.');
-        setNeedsVerification(true);
-      } else {
-        setError(errorMessage);
-      }
-    } finally {
-      setLoading(false);
-    }
+      const msg = err.message || err.name || 'Something went wrong';
+      if (msg.includes('not confirmed')) { setMode('verify'); setError('Please verify your email first.'); }
+      else if (msg.includes('already exists')) { setError('Account exists. Try signing in.'); setMode('signIn'); }
+      else if (msg.includes('Incorrect') || msg.includes('NotAuthorized')) { setError('Incorrect email or password.'); }
+      else { setError(msg); }
+    } finally { setLoading(false); }
   }
 
-  async function handleResendCode() {
-    setError('');
-    setLoading(true);
-    try {
-      await resendSignUpCode({ username: email });
-      alert('Verification code sent! Check your email.');
-    } catch (err) {
-      setError(err.message || 'Failed to resend code');
-    } finally {
-      setLoading(false);
-    }
+  async function handleResend() {
+    try { await resendSignUpCode({ username: email }); alert('Code sent. Check your email.'); }
+    catch (err) { setError(err.message || 'Failed to resend'); }
   }
 
   return (
     <div className="login-container">
       <div className="login-card">
-        <div className="login-header">
-          <h1>🏈</h1>
-          <h2>Fantasy Football AI Coach</h2>
-          <p>Get AI-powered lineup recommendations daily</p>
-        </div>
+        <img src="/logo.png" alt="Helix Sideline" className="login-logo" />
+        <p className="login-subtitle">AI powered live Fantasy Football Coaching and Lineup Recommendations</p>
 
         <h3 className="form-title">
-          {needsVerification ? 'Verify Email' : (isSignUp ? 'Create Account' : 'Sign In')}
+          {mode === 'verify' ? 'Verify Email' : mode === 'signUp' ? 'Create Account' : mode === 'forgotPassword' ? 'Forgot Password' : mode === 'resetPassword' ? 'Reset Password' : 'Sign In'}
         </h3>
 
-        {needsVerification && (
-          <p className="verification-message">
-            We sent a verification code to <strong>{email}</strong>. Please enter it below.
-          </p>
-        )}
-
-        <form onSubmit={handleSubmit} className="login-form">
-          {needsVerification ? (
+        <form onSubmit={handleSubmit}>
+          {mode === 'forgotPassword' ? (
             <>
-              <input
-                type="text"
-                placeholder="Verification Code"
-                value={verificationCode}
-                onChange={(e) => setVerificationCode(e.target.value)}
-                required
-                maxLength={6}
-              />
-              <p className="password-hint">Check your email for the 6-digit code</p>
+              <p className="hint">Enter your email and we'll send a reset code</p>
+              <input type="email" placeholder="Email" value={email}
+                onChange={(e) => setEmail(e.target.value)} required />
+            </>
+          ) : mode === 'resetPassword' ? (
+            <>
+              <p className="hint">Enter the code sent to {email} and your new password</p>
+              <input type="text" placeholder="Reset Code" value={code}
+                onChange={(e) => setCode(e.target.value)} maxLength={6} required />
+              <input type="password" placeholder="New Password" value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)} required minLength={8} />
+            </>
+          ) : mode === 'verify' ? (
+            <>
+              <p className="hint">Enter the 6-digit code sent to {email}</p>
+              <input type="text" placeholder="Verification Code" value={code}
+                onChange={(e) => setCode(e.target.value)} maxLength={6} required />
             </>
           ) : (
             <>
-              <input
-                type="email"
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
-              />
-
-              {isSignUp && (
-                <p className="password-hint">Password must be at least 8 characters</p>
-              )}
+              <input type="email" placeholder="Email" value={email}
+                onChange={(e) => setEmail(e.target.value)} required />
+              <input type="password" placeholder="Password" value={password}
+                onChange={(e) => setPassword(e.target.value)} required minLength={8} />
+              {mode === 'signUp' && <p className="hint">Password must be at least 8 characters</p>}
             </>
           )}
 
           {error && <div className="error-message">{error}</div>}
 
-          <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Loading...' : (needsVerification ? 'Verify Email' : (isSignUp ? 'Create Account' : 'Sign In'))}
+          <button type="submit" className="btn btn-primary btn-full" disabled={loading}>
+            {loading ? 'Loading...' : mode === 'verify' ? 'Verify' : mode === 'signUp' ? 'Create Account' : mode === 'forgotPassword' ? 'Send Reset Code' : mode === 'resetPassword' ? 'Reset Password' : 'Sign In'}
           </button>
         </form>
 
         <div className="login-footer">
-          {needsVerification ? (
+          {mode === 'verify' ? (
             <>
-              <button 
-                className="resend-code-btn"
-                onClick={handleResendCode}
-                type="button"
-                disabled={loading}
-              >
-                Resend Code
-              </button>
-              <button 
-                className="toggle-mode"
-                onClick={() => {
-                  setNeedsVerification(false);
-                  setIsSignUp(false);
-                  setVerificationCode('');
-                  setError('');
-                }}
-                type="button"
-              >
-                Back to Sign In
-              </button>
+              <button className="link-btn" onClick={handleResend}>Resend Code</button>
+              <button className="link-btn" onClick={() => { setMode('signIn'); setError(''); }}>Back to Sign In</button>
             </>
           ) : (
             <>
-              <p>
-                {isSignUp ? 'Already have an account?' : "Don't have an account?"}
-              </p>
-              <button 
-                className="toggle-mode"
-                onClick={() => setIsSignUp(!isSignUp)}
-                type="button"
-              >
-                {isSignUp ? 'Sign In' : 'Sign Up'}
+              <button className="link-btn" onClick={() => { setMode(mode === 'signIn' ? 'signUp' : 'signIn'); setError(''); }}>
+                {mode === 'signIn' ? "Don't have an account? Sign Up" : 'Already have an account? Sign In'}
               </button>
+              {mode === 'signIn' && (
+                <button className="link-btn" onClick={() => { setMode('forgotPassword'); setError(''); }}>
+                  Forgot Password?
+                </button>
+              )}
+              {(mode === 'forgotPassword' || mode === 'resetPassword') && (
+                <button className="link-btn" onClick={() => { setMode('signIn'); setError(''); }}>
+                  Back to Sign In
+                </button>
+              )}
             </>
           )}
         </div>

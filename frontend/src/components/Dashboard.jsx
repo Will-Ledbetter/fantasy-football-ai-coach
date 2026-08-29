@@ -5,7 +5,7 @@ import GradeGauge, { PositionGrades } from './GradeGauge';
 import MOCK_DATASETS from './mockAnalysis';
 import './Dashboard.css';
 
-function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateToFPL, onNavigateToFPLCenter }) {
+function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateToFPL, onNavigateToFPLCenter, onAddLeague }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
@@ -15,6 +15,11 @@ function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateTo
   const [demoMode, setDemoMode] = useState(null);
   const [expandedCards, setExpandedCards] = useState(new Set());
   const [leagueType, setLeagueType] = useState('redraft');
+  // Multi-league state
+  const [leagues, setLeagues] = useState([]);
+  const [activeLeagueId, setActiveLeagueId] = useState(null);
+  const [switchingLeague, setSwitchingLeague] = useState(false);
+  const [tier, setTier] = useState('free');
   // Chat state
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
@@ -32,16 +37,50 @@ function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateTo
   async function loadDashboard() {
     try {
       const token = await getToken();
-      const [analysisRes, configRes] = await Promise.all([
+      const [analysisRes, configRes, leaguesRes] = await Promise.all([
         fetch(`${awsConfig.apiEndpoint}/analysis/latest`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${awsConfig.apiEndpoint}/user/config`, { headers: { Authorization: `Bearer ${token}` } })
+        fetch(`${awsConfig.apiEndpoint}/user/config`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${awsConfig.apiEndpoint}/user/leagues`, { headers: { Authorization: `Bearer ${token}` } })
       ]);
       setAnalysis(await analysisRes.json());
       const config = await configRes.json();
       setLeagueType(config.leagueType || 'redraft');
+      setTier(config.subscription ? getTierFromSub(config.subscription) : 'free');
+      if (leaguesRes.ok) {
+        const lg = await leaguesRes.json();
+        setLeagues(lg.leagues || []);
+        setActiveLeagueId(lg.activeLeagueId || config.leagueId || null);
+      }
     } catch (err) {
       console.error('Load error:', err);
     } finally { setLoading(false); }
+  }
+
+  function getTierFromSub(sub) {
+    if (!sub || !sub.tier || sub.tier === 'free') return 'free';
+    if (sub.status === 'active') return sub.tier;
+    if (sub.status === 'cancelled' && sub.periodEndDate && new Date(sub.periodEndDate) > new Date()) return sub.tier;
+    return 'free';
+  }
+
+  async function switchLeague(leagueId) {
+    if (leagueId === activeLeagueId || switchingLeague) return;
+    setSwitchingLeague(true);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${awsConfig.apiEndpoint}/user/leagues/activate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leagueId })
+      });
+      if (res.ok) {
+        setActiveLeagueId(leagueId);
+        setLoading(true);
+        await loadDashboard();
+      }
+    } catch (err) {
+      console.error('Switch league error:', err);
+    } finally { setSwitchingLeague(false); }
   }
 
   async function runAnalysis() {
@@ -184,6 +223,32 @@ function Dashboard({ user, onNavigateToSettings, onNavigateToDraft, onNavigateTo
               )}
               <div className="dash-meta">
                 <h1>{leagueType === 'dynasty' ? 'Dynasty Command Center' : leagueType === 'keeper' ? 'Keeper Command Center' : 'Game Day Command Center'}</h1>
+                {(leagues.length > 0 || onAddLeague) && (
+                  <div className="league-switcher">
+                    {leagues.length > 1 ? (
+                      <select
+                        className="league-select"
+                        value={activeLeagueId || ''}
+                        onChange={e => switchLeague(e.target.value)}
+                        disabled={switchingLeague}
+                      >
+                        {leagues.map(l => (
+                          <option key={l.leagueId} value={l.leagueId}>
+                            {l.name || `${l.platform} · ${l.leagueId}`}{l.leagueType ? ` (${l.leagueType})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : leagues.length === 1 ? (
+                      <span className="league-current">{leagues[0].name || leagues[0].leagueId}</span>
+                    ) : null}
+                    {onAddLeague && (
+                      <button className="league-add-btn" onClick={onAddLeague} title={tier === 'free' ? 'Upgrade to add more leagues' : 'Add a league'}>
+                        + Add League
+                      </button>
+                    )}
+                    {switchingLeague && <span className="league-switching">Switching…</span>}
+                  </div>
+                )}
                 {analysis?.lastUpdated && <p className="updated">Last analysis: {new Date(analysis.lastUpdated).toLocaleDateString()}</p>}
               </div>
             </div>

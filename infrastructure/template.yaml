@@ -12,17 +12,28 @@ Parameters:
   
   BedrockModelId:
     Type: String
-    Default: anthropic.claude-3-5-sonnet-20241022-v2:0
+    Default: us.anthropic.claude-sonnet-4-5-20250514-v1:0
   
   SESFromEmail:
     Type: String
     Description: Verified SES email address for sending notifications
+
+  SNSPlatformAppArn:
+    Type: String
+    Default: ''
+    Description: SNS Platform Application ARN for Apple Push Notifications (optional)
+
+Conditions:
+  HasSNSPlatformArn: !Not [!Equals [!Ref SNSPlatformAppArn, '']]
 
 Globals:
   Function:
     Runtime: nodejs22.x
     Timeout: 60
     MemorySize: 512
+    Tags:
+      Project: fantasy-football-ai-coach
+      Environment: !Ref Environment
     Environment:
       Variables:
         DYNAMODB_TABLE: !Ref UsersTable
@@ -32,12 +43,41 @@ Globals:
         ENVIRONMENT: !Ref Environment
 
 Resources:
+  # KMS Key for encrypting ESPN credentials
+  CredentialsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Encrypts ESPN session credentials in DynamoDB
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowRootAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+      Tags:
+        - Key: Project
+          Value: fantasy-football-ai-coach
+
+  CredentialsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/fantasy-football-credentials
+      TargetKeyId: !Ref CredentialsKey
+
   # DynamoDB Table for Users
   UsersTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub fantasy-football-users-${Environment}
       BillingMode: PAY_PER_REQUEST
+      Tags:
+        - Key: Project
+          Value: fantasy-football-ai-coach
+        - Key: Environment
+          Value: !Ref Environment
       AttributeDefinitions:
         - AttributeName: userId
           AttributeType: S
@@ -59,7 +99,20 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
         - LambdaInvokePolicy:
-            FunctionName: '*'
+            FunctionName: !Sub fantasy-football-fetch-roster-${Environment}
+        - LambdaInvokePolicy:
+            FunctionName: !Sub fantasy-football-fetch-player-data-${Environment}
+        - LambdaInvokePolicy:
+            FunctionName: !Sub fantasy-football-ai-analyzer-${Environment}
+        - LambdaInvokePolicy:
+            FunctionName: !Sub fantasy-football-send-notifications-${Environment}
+        - LambdaInvokePolicy:
+            FunctionName: !Sub fantasy-football-web-research-${Environment}
+        - Statement:
+          - Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: !GetAtt CredentialsKey.Arn
 
   FetchRosterFunction:
     Type: AWS::Serverless::Function
@@ -133,11 +186,37 @@ Resources:
       FunctionName: !Sub fantasy-football-api-${Environment}
       CodeUri: ../lambda/api/
       Handler: index.handler
+      Environment:
+        Variables:
+          SNS_PLATFORM_APP_ARN: !If [HasSNSPlatformArn, !Ref SNSPlatformAppArn, '']
+          KMS_KEY_ID: !Ref CredentialsKey
+          USER_POOL_ID: !Ref UserPool
+          ALLOWED_ORIGIN: 'https://main.d2usrsmdilcuki.amplifyapp.com'
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
         - LambdaInvokePolicy:
-            FunctionName: '*'
+            FunctionName: !Sub fantasy-football-daily-analyzer-${Environment}
+        - Statement:
+          - Effect: Allow
+            Action:
+              - sns:CreatePlatformEndpoint
+              - sns:Publish
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+            Resource: !GetAtt CredentialsKey.Arn
+          - Effect: Allow
+            Action:
+              - cognito-idp:AdminDisableUser
+            Resource: !GetAtt UserPool.Arn
+          - Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+            Resource: '*'
       Events:
         UserSetup:
           Type: Api
@@ -164,6 +243,40 @@ Resources:
           Properties:
             RestApiId: !Ref ApiGateway
             Path: /user/config
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserLeaguesGet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/leagues
+            Method: GET
+        UserLeaguesDelete:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/leagues
+            Method: DELETE
+        UserLeaguesOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/leagues
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserLeaguesActivate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/leagues/activate
+            Method: POST
+        UserLeaguesActivateOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/leagues/activate
             Method: OPTIONS
             Auth:
               Authorizer: NONE
@@ -209,6 +322,118 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
+        UserDevice:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/device
+            Method: POST
+        UserDeviceOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/device
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserPreferences:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/preferences
+            Method: PUT
+        UserPreferencesOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/preferences
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserSubscription:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/subscription
+            Method: GET
+        UserSubscriptionOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/subscription
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserSubscriptionVerify:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/subscription/verify
+            Method: POST
+        UserSubscriptionVerifyOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/subscription/verify
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserSubscriptionCancel:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/subscription/cancel
+            Method: POST
+        UserSubscriptionCancelOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/subscription/cancel
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserAccountDelete:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/account
+            Method: DELETE
+        UserAccountDeleteOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/account
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        Chat:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /chat
+            Method: POST
+        ChatOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /chat
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        UserRulebook:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/rulebook
+            Method: PUT
+        UserRulebookOptions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /user/rulebook
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
 
   # API Gateway for Dashboard
   ApiGateway:
@@ -216,10 +441,13 @@ Resources:
     Properties:
       Name: !Sub fantasy-football-api-${Environment}
       StageName: !Ref Environment
+      Tags:
+        Project: fantasy-football-ai-coach
+        Environment: !Ref Environment
       Cors:
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization'"
-        AllowOrigin: "'*'"
+        AllowOrigin: "'https://main.d2usrsmdilcuki.amplifyapp.com'"
       Auth:
         DefaultAuthorizer: CognitoAuthorizer
         Authorizers:
@@ -231,10 +459,20 @@ Resources:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: !Sub fantasy-football-users-${Environment}
+      UserPoolTags:
+        Project: fantasy-football-ai-coach
+        Environment: !Ref Environment
       AutoVerifiedAttributes:
         - email
       UsernameAttributes:
         - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
       Schema:
         - Name: email
           Required: true

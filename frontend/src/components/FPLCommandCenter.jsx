@@ -30,7 +30,7 @@ function FPLCommandCenter({ user, onBack }) {
     setLoading(true);
     try {
       const [playersData, league, rosters, users] = await Promise.all([
-        fetch(`${SLEEPER_API}/players/nfl`).then(r => r.json()),
+        fetch(`${SLEEPER_API}/players/clubsoccer:epl`).then(r => r.json()),
         fetch(`${SLEEPER_API}/league/${leagueId}`).then(r => r.json()),
         fetch(`${SLEEPER_API}/league/${leagueId}/rosters`).then(r => r.json()),
         fetch(`${SLEEPER_API}/league/${leagueId}/users`).then(r => r.json()),
@@ -51,10 +51,12 @@ function FPLCommandCenter({ user, onBack }) {
   function buildRoster(rosterData, playersDb, users, userId) {
     const sleeperUser = users?.find(u => u.user_id === userId);
     const teamName = sleeperUser?.metadata?.team_name || sleeperUser?.display_name || 'My Team';
+    const posMap = { F: 'FWD', M: 'MID', D: 'DEF', GK: 'GK' };
     const rosterPlayers = (rosterData.players || []).map(pid => {
       const p = playersDb[pid];
       if (!p) return { playerId: pid, name: 'Unknown', position: '?', team: 'FA', status: 'healthy' };
-      return { playerId: pid, name: `${p.first_name} ${p.last_name}`, position: p.position, team: p.team || 'FA', status: p.injury_status || 'healthy', age: p.age };
+      const pos = posMap[p.position] || p.position || '?';
+      return { playerId: pid, name: p.full_name || `${p.first_name || ''} ${p.last_name || ''}`.trim(), position: pos, team: p.team_abbr || 'FA', status: p.injury_status || 'healthy', age: p.age };
     });
     const starterIds = rosterData.starters || [];
     return {
@@ -67,10 +69,42 @@ function FPLCommandCenter({ user, onBack }) {
   }
 
   async function connect() {
-    if (!leagueId || !sleeperUserId) { setError('Both League ID and Sleeper User ID required'); return; }
-    localStorage.setItem('fplLeagueId', leagueId);
-    localStorage.setItem('fplSleeperUserId', sleeperUserId);
-    await autoConnect();
+    if (!leagueId || !sleeperUserId) { setError('Both League ID and Sleeper Username required'); return; }
+    setLoading(true);
+    setError('');
+    try {
+      // Resolve username to user_id via Sleeper API
+      let resolvedUserId = sleeperUserId;
+      if (!/^\d+$/.test(sleeperUserId)) {
+        // It's a username, not an ID — look it up
+        const userRes = await fetch(`${SLEEPER_API}/user/${sleeperUserId}`);
+        if (!userRes.ok) throw new Error(`Username "${sleeperUserId}" not found on Sleeper`);
+        const userData = await userRes.json();
+        if (!userData || !userData.user_id) throw new Error(`Could not resolve username "${sleeperUserId}"`);
+        resolvedUserId = userData.user_id;
+      }
+      setSleeperUserId(resolvedUserId);
+      localStorage.setItem('fplLeagueId', leagueId);
+      localStorage.setItem('fplSleeperUserId', resolvedUserId);
+      
+      // Now connect with resolved ID
+      const [playersData, league, rosters, users] = await Promise.all([
+        fetch(`${SLEEPER_API}/players/clubsoccer:epl`).then(r => r.json()),
+        fetch(`${SLEEPER_API}/league/${leagueId}`).then(r => r.json()),
+        fetch(`${SLEEPER_API}/league/${leagueId}/rosters`).then(r => r.json()),
+        fetch(`${SLEEPER_API}/league/${leagueId}/users`).then(r => r.json()),
+      ]);
+      setPlayers(playersData);
+      setLeagueInfo({ ...league, users });
+      const myRoster = rosters.find(r => r.owner_id === resolvedUserId);
+      if (myRoster) {
+        setRoster(buildRoster(myRoster, playersData, users, resolvedUserId));
+        setConnected(true);
+      } else {
+        setError('Could not find your roster in this league. Make sure the username/ID matches your Sleeper account.');
+      }
+    } catch (e) { setError(e.message); }
+    setLoading(false);
   }
 
   async function runAnalysis() {
@@ -188,9 +222,9 @@ function FPLCommandCenter({ user, onBack }) {
               <span className="hint">Sleeper → League Settings → scroll to bottom</span>
             </div>
             <div className="input-group">
-              <label>Your Sleeper User ID</label>
-              <input value={sleeperUserId} onChange={e => setSleeperUserId(e.target.value)} placeholder="Your user ID (found in Sleeper profile URL)" />
-              <span className="hint">sleeper.com/users/YOUR_ID</span>
+              <label>Your Sleeper Username</label>
+              <input value={sleeperUserId} onChange={e => setSleeperUserId(e.target.value)} placeholder="Your Sleeper username (e.g., willledbetter)" />
+              <span className="hint">Your display name on Sleeper — or numeric user ID if you have it</span>
             </div>
             {error && <div className="error-msg">{error}</div>}
             <button className="connect-btn" onClick={connect} disabled={loading}>

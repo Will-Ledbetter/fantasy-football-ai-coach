@@ -14,6 +14,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [hasLeague, setHasLeague] = useState(false);
   const [view, setView] = useState('dashboard');
+  const [addingLeague, setAddingLeague] = useState(false);
 
   useEffect(() => {
     checkUser();
@@ -53,7 +54,8 @@ function App() {
 
       if (response.ok) {
         const config = await response.json();
-        return config && config.leagueId;
+        // User has a league if there's an active leagueId OR any saved leagues
+        return !!(config && (config.leagueId || (Array.isArray(config.leagues) && config.leagues.length > 0)));
       }
       return false;
     } catch (error) {
@@ -67,7 +69,16 @@ function App() {
     setView('dashboard');
   }
 
+  // Add another league (paid users) — reuse the Setup wizard in "add" mode
+  function handleAddLeague() {
+    setAddingLeague(true);
+    setHasLeague(false);
+    setView('dashboard');
+  }
+
+  // Change/replace league from Settings — same wizard, first-time style
   function handleChangeLeague() {
+    setAddingLeague(false);
     setHasLeague(false);
     setView('dashboard');
   }
@@ -86,7 +97,14 @@ function App() {
   }
 
   if (!hasLeague) {
-    return <Setup user={user} onComplete={() => { setHasLeague(true); setView('dashboard'); }} />;
+    return (
+      <Setup
+        user={user}
+        addingLeague={addingLeague}
+        onComplete={() => { setHasLeague(true); setAddingLeague(false); setView('dashboard'); }}
+        onCancel={addingLeague ? () => { setAddingLeague(false); setHasLeague(true); setView('dashboard'); } : undefined}
+      />
+    );
   }
 
   if (view === 'settings') {
@@ -119,6 +137,7 @@ function App() {
       onNavigateToDraft={() => setView('nfl-draft')}
       onNavigateToFPL={() => setView('fpl-draft')}
       onNavigateToFPLCenter={() => setView('fpl-center')}
+      onAddLeague={handleAddLeague}
     />
   );
 }
