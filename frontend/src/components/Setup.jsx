@@ -50,17 +50,31 @@ function Setup({ user, onComplete, onCancel, addingLeague = false }) {
     const rawUsername = sleeperUsername.trim();
     if (!rawUsername) { setError('Enter your Sleeper username'); return; }
     setError(''); setLoading(true);
-    try {
-      // Sleeper usernames are lowercase and must be URL-encoded (handles spaces/symbols)
-      const lookup = encodeURIComponent(rawUsername.toLowerCase());
-      const userRes = await fetch(`https://api.sleeper.app/v1/user/${lookup}`);
-      // Sleeper returns 200 with "null" body for a username that doesn't exist
-      const userData = userRes.ok ? await userRes.json() : null;
-      if (!userData || !userData.user_id) {
-        throw new Error(`"${rawUsername}" not found on Sleeper. Use your Sleeper username (not display name), and check for typos.`);
-      }
-      setSleeperUserId(userData.user_id);
 
+    // Sleeper usernames are lowercase and must be URL-encoded (handles spaces/symbols)
+    const lookup = encodeURIComponent(rawUsername.toLowerCase());
+
+    // Step 1: look up the user (network errors surface as "Failed to fetch")
+    let userData;
+    try {
+      const userRes = await fetch(`https://api.sleeper.app/v1/user/${lookup}`);
+      userData = userRes.ok ? await userRes.json() : null;
+    } catch (netErr) {
+      console.error('Sleeper user lookup network error:', netErr);
+      setError('Could not reach Sleeper. Check your internet connection and try again.');
+      setLoading(false);
+      return;
+    }
+
+    if (!userData || !userData.user_id) {
+      setError(`"${rawUsername}" not found on Sleeper. Use your Sleeper username (not display name), and check for typos.`);
+      setLoading(false);
+      return;
+    }
+    setSleeperUserId(userData.user_id);
+
+    // Step 2: gather leagues across seasons
+    try {
       const year = new Date().getFullYear();
       const yearsToCheck = [year, year + 1, year - 1];
       let allLeagues = [];
@@ -70,17 +84,22 @@ function Setup({ user, onComplete, onCancel, addingLeague = false }) {
           if (!res.ok) continue;
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
-            // Avoid duplicates across seasons (same league_id can appear)
             const existingIds = new Set(allLeagues.map(l => l.league_id));
             allLeagues = [...allLeagues, ...data.filter(l => !existingIds.has(l.league_id))];
           }
         } catch { /* skip year on error */ }
       }
-      if (allLeagues.length === 0) throw new Error(`No NFL leagues found for @${rawUsername}. Make sure you have a league on Sleeper for this season.`);
+      if (allLeagues.length === 0) {
+        setError(`No NFL leagues found for @${rawUsername}. Make sure you have a league on Sleeper for this season.`);
+        setLoading(false);
+        return;
+      }
       setLeagues(allLeagues);
       setStep(3);
-    } catch (err) { setError(err.message); }
-    finally { setLoading(false); }
+    } catch (err) {
+      console.error('Sleeper leagues lookup error:', err);
+      setError('Could not load your leagues from Sleeper. Please try again.');
+    } finally { setLoading(false); }
   }
 
   async function handleSubmit() {
@@ -88,19 +107,34 @@ function Setup({ user, onComplete, onCancel, addingLeague = false }) {
     try {
       const session = await fetchAuthSession();
       const token = session.tokens?.idToken?.toString();
+      if (!token) {
+        setError('Your session expired. Please sign out and sign back in.');
+        setLoading(false);
+        return;
+      }
       const body = platform === 'sleeper'
         ? { platform: 'sleeper', leagueId: selectedLeague.league_id, leagueName: selectedLeague.name || '', platformUserId: sleeperUserId, leagueType }
         : { platform: 'espn', leagueId: espnLeagueId, leagueName: '', espnS2: espnS2 || undefined, espnSwid: espnSwid || undefined, leagueType };
 
-      const res = await fetch(`${awsConfig.apiEndpoint}/user/setup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(body)
-      });
+      let res;
+      try {
+        res = await fetch(`${awsConfig.apiEndpoint}/user/setup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(body)
+        });
+      } catch (netErr) {
+        console.error('Setup network error:', netErr);
+        setError('Could not reach the server. Check your connection and try again.');
+        setLoading(false);
+        return;
+      }
+
       if (!res.ok) {
-        const d = await res.json();
+        let d = {};
+        try { d = await res.json(); } catch {}
         if (d.limitReached) throw new Error(d.error || 'League limit reached. Upgrade to Pro to add more leagues.');
-        throw new Error(d.error || 'Setup failed');
+        throw new Error(d.error || `Setup failed (${res.status})`);
       }
       onComplete();
     } catch (err) { setError(err.message); }
